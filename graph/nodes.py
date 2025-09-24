@@ -988,46 +988,42 @@ def call_tool_with_llm(executor: str, tool_name: str, task_context: str, state: 
 
     while retry_count <= max_retries:
         try:
-            # Step 1: Generate tool call
-            # For Reasoner, provide only the specific tool function definition
-            # For Chat, provide both the tool and ask_user functions
-            if executor == "reasoner":
-                functions = [{
+            # Step 1: Generate tool call using new tools format
+            # Build strict tool schemas
+            tool_schemas = [{
+                "type": "function",
+                "function": {
                     "name": tool_name,
-                    "description": tool_desc,  # Use truncated description for Reasoner
+                    "description": tool_desc if executor == "reasoner" else tool_meta.description,
+                    "strict": True,
                     "parameters": tool_meta.parameters
-                }, {
+                }
+            }, {
+                "type": "function",
+                "function": {
                     "name": "ask_user",
                     "description": "向用户询问缺失的信息",
+                    "strict": True,
                     "parameters": {
                         "type": "object",
                         "properties": {
                             "question": {"type": "string", "description": "要问用户的问题"}
                         },
-                        "required": ["question"]
+                        "required": ["question"],
+                        "additionalProperties": False
                     }
-                }]
-            else:
-                functions = [{
-                    "name": tool_name,
-                    "description": tool_meta.description,  # Full description for Chat
-                    "parameters": tool_meta.parameters
-                }, {
-                    "name": "ask_user",
-                    "description": "向用户询问缺失的信息",
-                    "parameters": {
-                        "type": "object",
-                        "properties": {
-                            "question": {"type": "string", "description": "要问用户的问题"}
-                        },
-                        "required": ["question"]
-                    }
-                }]
+                }
+            }]
+
+            # Set tool_choice to force selection of the specific tool
+            tool_choice = {"type": "function", "function": {"name": tool_name}}
 
             response = llm_client.generate(
                 messages=execution_messages,
-                functions=functions,
-                stream=False
+                tools=tool_schemas,
+                tool_choice=tool_choice,
+                stream=False,
+                response_format=None  # Don't use JSON format for tool calls
             )
 
             # Check if we got tool calls
@@ -1270,14 +1266,13 @@ def todo_dispatch_node(state: AgentState) -> Dict[str, Any]:
         if not has_all_needed:
             logger.info(f"👤 USER INPUT REQUIRED - Todo {todo.id} missing: {missing_params}")
             logger.info(f"   Todo: {todo.title}")
-            # Set state for user input collection and end execution to return to CLI
+            # Set state for user input collection - route to ask_user_interrupt node
             state["needs_user_input"] = {
                 "todo_id": todo.id,
                 "needs": missing_params,
                 "todo_title": todo.title
             }
-            state["should_end"] = True
-            state["current_node"] = "end"
+            state["current_node"] = "ask_user_interrupt"
             return state
 
     try:

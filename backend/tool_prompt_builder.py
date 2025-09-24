@@ -32,12 +32,13 @@ def build_tool_prompts() -> Dict[str, Any]:
     tool_name_index = {}
 
     for tool_meta in registry.list_tools():
-        # Build function definition for API
+        # Build function definition for API with strict schema
         function_def = {
             "type": "function",
             "function": {
                 "name": tool_meta.name,
                 "description": tool_meta.description,
+                "strict": True,  # Enable strict JSON Schema validation
                 "parameters": tool_meta.parameters
             }
         }

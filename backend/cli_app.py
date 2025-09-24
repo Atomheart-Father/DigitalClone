@@ -515,6 +515,40 @@ class CLIApp:
                         if node_name == "planner_generate" and node_state.get("plan"):
                             logger.info(f"Planner generated {len(node_state['plan'])} todos")
 
+                        # 🔴 关键：捕捉 ask_user_interrupt 中断并阻塞等待输入
+                        if node_name == "ask_user_interrupt" and node_state.get("needs_user_input"):
+                            logger.info("🛑 DETECTED USER INPUT REQUIREMENT - Blocking for user input")
+                            needs_info = node_state["needs_user_input"]
+                            prompt = f"需要为 '{needs_info.get('todo_title', '任务')}' 提供参数: {', '.join(needs_info.get('needs', []))}"
+
+                            print(f"\n\033[33m[USER INPUT REQUIRED]\033[0m {prompt}")
+                            try:
+                                # 阻塞等待用户输入，最多等待120秒
+                                import select
+                                import sys
+
+                                print("> ", end="", flush=True)
+                                ready, _, _ = select.select([sys.stdin], [], [], 120.0)
+
+                                if ready:
+                                    user_text = input().strip()
+                                else:
+                                    print("\n输入超时，使用默认值继续...")
+                                    user_text = ""  # 超时降级
+
+                            except (EOFError, KeyboardInterrupt):
+                                print("\n操作取消")
+                                user_text = ""
+
+                            # 将输入写回状态并同步推进
+                            accumulated_state["user_provided_input"] = {param: user_text for param in needs_info.get('needs', [])}
+                            accumulated_state["needs_info"] = needs_info
+
+                            # 同步调用以处理用户输入并继续执行
+                            accumulated_state = planner_app.invoke(accumulated_state, config=config)
+                            logger.info("✅ User input injected and graph resumed")
+                            continue
+
                         # Check for completion
                         if node_state.get("should_end") or node_state.get("final_answer"):
                             final_state = accumulated_state.copy()

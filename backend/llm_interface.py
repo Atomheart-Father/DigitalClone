@@ -42,6 +42,8 @@ class LLMClient(ABC):
         self,
         messages: List[Message],
         functions: Optional[List[Dict[str, Any]]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
         stream: bool = False,
         system_prompt: Optional[str] = None,
         response_format: Optional[Dict[str, Any]] = None,
@@ -253,6 +255,8 @@ class DeepSeekChatClient(LLMClient):
         self,
         messages: List[Message],
         functions: Optional[List[Dict[str, Any]]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
         stream: bool = False,
         system_prompt: Optional[str] = None,
         response_format: Optional[Dict[str, Any]] = None,
@@ -276,10 +280,17 @@ class DeepSeekChatClient(LLMClient):
             "stream": stream
         }
 
-        if functions:
+        # Handle tools/function calling (new OpenAI format)
+        if tools:
+            payload["tools"] = tools
+            if tool_choice:
+                payload["tool_choice"] = tool_choice
+        elif functions:
+            # Legacy support for functions parameter
             payload["functions"] = functions
 
-        if response_format:
+        # Only set response_format when not using tools (to avoid conflicts)
+        if response_format and not tools:
             payload["response_format"] = response_format
 
         try:
@@ -352,6 +363,8 @@ class DeepSeekReasonerClient(LLMClient):
         self,
         messages: List[Message],
         functions: Optional[List[Dict[str, Any]]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
         stream: bool = False,
         system_prompt: Optional[str] = None,
         response_format: Optional[Dict[str, Any]] = None,
@@ -483,6 +496,8 @@ class MockClient(LLMClient):
         self,
         messages: List[Message],
         functions: Optional[List[Dict[str, Any]]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
         stream: bool = False,
         system_prompt: Optional[str] = None,
         response_format: Optional[Dict[str, Any]] = None,
