@@ -446,71 +446,88 @@ def planner_generate_node(state: AgentState) -> Dict[str, Any]:
     # Create LLM client
     llm_client = create_llm_client("reasoner")
 
-    # Build tool information for planner
-    tool_prompts = build_tool_prompts()
-    tools_text = f"""
-可用工具：
-{tool_prompts["tools_text_reasoner"]}
+    # 使用极简工具信息
+    tools_text = "可用工具：calculator（计算）、datetime（时间）、rag_search（搜索）、web_search（上网）、file_read（读文件）"
 
-在制定计划时，请考虑使用以下工具：
-- calculator: 数学计算
-- datetime: 时间处理
-- rag_search: 知识库搜索
-- rag_upsert: 文档入库
-"""
-
-    # Construct user prompt with explicit JSON structure
+    # 使用从测试中验证成功的prompt格式
     user_prompt = f"""用户任务：{user_request}
 
-请基于可用工具制定详细的执行计划。{tools_text}
-
-你必须严格按照以下JSON格式响应，只输出JSON，不要任何其他解释：
+请制定执行计划。只输出JSON格式：
 
 {{
-  "goal": "用户任务的清晰目标描述",
-  "success_criteria": "如何判断任务成功完成的明确标准",
+  "goal": "任务目标描述",
+  "success_criteria": "成功标准",
   "todos": [
     {{
       "id": "T1",
-      "title": "具体可执行的步骤标题",
-      "why": "这一步的必要性和作用",
-      "type": "tool|chat|reason|write|research",
-      "tool": "calculator|datetime|rag_search|rag_upsert|web_search|web_read|file_read|tabular_qa|python_exec|markdown_writer",
-      "input": {{"参数名": "参数值"}},
-      "expected_output": "期望产出的格式描述",
-      "needs": ["需要用户提供的具体信息"]
+      "title": "具体步骤",
+      "why": "为什么需要这一步",
+      "type": "tool",
+      "tool": "calculator",
+      "input": {{"expression": "2+2"}},
+      "expected_output": "计算结果",
+      "needs": []
     }}
   ]
-}}"""
+}}
+
+{tools_text}"""
 
     try:
         # Use JSON mode for strict structured output
+        # 移除response_format参数，因为它会导致DeepSeek reasoner返回空内容
         response = llm_client.generate(
             messages=[Message(role=Role.USER, content=user_prompt)],
             system_prompt=system_prompt,
-            stream=False,
-            response_format={"type": "json_object"}  # Force JSON output
+            stream=False
+            # response_format={"type": "json_object"}  # 移除：会导致DeepSeek reasoner返回空内容
         )
 
         # Parse the JSON response
         content = response.content.strip()
         logger.debug(f"Raw planner response: {content[:500]}...")
 
-        # Try direct JSON parsing first
+        # Try to clean and parse JSON
+        plan_data = None
+
+        # First, try direct JSON parsing
         try:
             plan_data = json.loads(content)
-        except json.JSONDecodeError:
-            # Try to extract JSON from text using regex
+            logger.info("Direct JSON parsing successful")
+        except json.JSONDecodeError as e:
+            logger.warning(f"Direct JSON parsing failed: {e}")
+
+            # Try to extract JSON from text using regex (more robust)
+            import re
             json_match = re.search(r'\{.*\}', content, re.DOTALL)
             if json_match:
+                extracted_json = json_match.group()
+                logger.info(f"Extracted JSON length: {len(extracted_json)} chars")
+
                 try:
-                    plan_data = json.loads(json_match.group())
-                    logger.info("Recovered JSON from regex extraction")
+                    plan_data = json.loads(extracted_json)
+                    logger.info("JSON extraction successful")
                 except json.JSONDecodeError as recovery_error:
-                    logger.error(f"JSON recovery failed: {recovery_error}")
-                    raise ValueError(f"Could not parse JSON response: {content[:200]}...")
+                    logger.error(f"JSON extraction failed: {recovery_error}")
+
+                    # Try to fix common JSON issues
+                    try:
+                        # Remove trailing commas before closing braces/brackets
+                        fixed_json = re.sub(r',(\s*[}\]])', r'\1', extracted_json)
+                        plan_data = json.loads(fixed_json)
+                        logger.info("JSON fixed and parsed successfully")
+                    except json.JSONDecodeError:
+                        logger.error("JSON fixing also failed")
+                        # Log the problematic content for debugging
+                        logger.error(f"Problematic content: {extracted_json[-200:]}")
+                        raise ValueError(f"Could not parse JSON response even after fixing")
+
             else:
+                logger.error(f"No JSON structure found in response: {content[:200]}...")
                 raise ValueError(f"No JSON found in response: {content[:200]}...")
+
+        if plan_data is None:
+            raise ValueError("Failed to parse plan data from response")
 
         # Validate JSON against schema (basic validation)
         required_keys = ["goal", "success_criteria", "todos"]
@@ -573,9 +590,10 @@ def planner_generate_node(state: AgentState) -> Dict[str, Any]:
                 state["plan"] = []
         else:
             state["plan"] = []
+
     except Exception as e:
         logger.error(f"Plan generation failed: {e}")
-        logger.error(f"Response content: {response.content[:500] if response else 'No response'}")
+        # Note: response variable may not be defined if exception occurred during request
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
         state["plan"] = []

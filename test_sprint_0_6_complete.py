@@ -11,17 +11,12 @@ from pathlib import Path
 project_root = Path(__file__).parent
 sys.path.insert(0, str(project_root))
 
+# Force use real DeepSeek clients for testing blocking issues
+os.environ["ENABLE_MOCK_CLIENT_IF_NO_KEY"] = "false"
+
 def test_planner_json_generation():
     """Test planner generates proper JSON structure."""
     print("🧪 Testing planner JSON generation...")
-
-    # Force mock client
-    import backend.llm_interface as llm_module
-    original_create = llm_module.create_llm_client
-    def mock_create(client_type='auto'):
-        from backend.llm_interface import MockClient
-        return MockClient()
-    llm_module.create_llm_client = mock_create
 
     try:
         from graph.nodes import planner_generate_node
@@ -49,20 +44,10 @@ def test_planner_json_generation():
         import traceback
         traceback.print_exc()
         return False
-    finally:
-        llm_module.create_llm_client = original_create
 
 def test_tool_call_protocol():
     """Test two-step tool calling protocol."""
     print("🧪 Testing tool call protocol...")
-
-    # Force mock client
-    import backend.llm_interface as llm_module
-    original_create = llm_module.create_llm_client
-    def mock_create(client_type='auto'):
-        from backend.llm_interface import MockClient
-        return MockClient()
-    llm_module.create_llm_client = mock_create
 
     try:
         from graph.nodes import call_tool_with_llm
@@ -82,8 +67,6 @@ def test_tool_call_protocol():
         import traceback
         traceback.print_exc()
         return False
-    finally:
-        llm_module.create_llm_client = original_create
 
 def test_executor_routing():
     """Test executor routing logic."""
@@ -93,12 +76,12 @@ def test_executor_routing():
     from graph.state import TodoItem, TodoType
 
     # Test default routing
-    todo1 = TodoItem(id="T1", title="Test", type=TodoType.TOOL, tool="calculator")
+    todo1 = TodoItem(id="T1", title="Test", why="Test calculator", type=TodoType.TOOL, tool="calculator")
     executor1 = resolve_executor(todo1)
     assert executor1 == "chat", f"Calculator should route to chat, got {executor1}"
 
     # Test explicit executor
-    todo2 = TodoItem(id="T2", title="Test", type=TodoType.TOOL, tool="calculator", executor="reasoner")
+    todo2 = TodoItem(id="T2", title="Test", why="Test calculator with reasoner", type=TodoType.TOOL, tool="calculator", executor="reasoner")
     executor2 = resolve_executor(todo2)
     assert executor2 == "reasoner", f"Explicit executor should be respected, got {executor2}"
 
@@ -128,14 +111,6 @@ def test_complete_planner_execution():
     """Test complete planner execution."""
     print("🧪 Testing complete planner execution...")
 
-    # Force mock client
-    import backend.llm_interface as llm_module
-    original_create = llm_module.create_llm_client
-    def mock_create(client_type='auto'):
-        from backend.llm_interface import MockClient
-        return MockClient()
-    llm_module.create_llm_client = mock_create
-
     try:
         from graph import planner_app
         from graph.state import create_initial_state
@@ -164,8 +139,6 @@ def test_complete_planner_execution():
         import traceback
         traceback.print_exc()
         return False
-    finally:
-        llm_module.create_llm_client = original_create
 
 def main():
     """Run all tests."""

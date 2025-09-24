@@ -481,14 +481,54 @@ class CLIApp:
             self._handle_graph_execution(initial_state)
 
     def _handle_planner_execution(self, user_input: str, route_decision):
-        """Handle planner execution using LangGraph planner."""
+        """Handle planner execution using LangGraph planner with heartbeat monitoring."""
         try:
             # Create initial state for planner
             initial_state = create_initial_state(user_input)
 
-            # Execute planner graph
+            # Execute planner graph with heartbeat monitoring
             config = {"configurable": {"thread_id": f"planner-{user_input[:20]}"}}  # Use input prefix for thread ID
-            final_state = planner_app.invoke(initial_state, config=config)
+
+            # Hotfix-4: Add heartbeat logging for planner execution monitoring
+            import time
+            start_time = time.time()
+            logger.info("Starting planner execution...")
+
+            # Use stream mode to monitor progress and prevent blocking
+            final_state = None
+            try:
+                # Try streaming mode first for better monitoring
+                accumulated_state = initial_state.copy()
+                for event in planner_app.stream(initial_state, config=config):
+                    for node_name, node_state in event.items():
+                        logger.debug(f"Planner heartbeat: {node_name} completed")
+                        accumulated_state.update(node_state)
+
+                        # Check for planner generation completion
+                        if node_name == "planner_generate" and node_state.get("plan"):
+                            logger.info(f"Planner generated {len(node_state['plan'])} todos")
+
+                        # Check for completion
+                        if node_state.get("should_end") or node_state.get("final_answer"):
+                            final_state = accumulated_state
+                            break
+
+                    # Safety timeout check (5 minutes max)
+                    if time.time() - start_time > 300:
+                        logger.error("Planner execution timeout after 5 minutes")
+                        raise TimeoutError("Planner execution exceeded 5 minute timeout")
+
+                if final_state is None:
+                    # Fallback to invoke if streaming didn't complete
+                    logger.warning("Planner streaming didn't complete, falling back to invoke")
+                    final_state = planner_app.invoke(initial_state, config=config)
+
+            except Exception as stream_error:
+                logger.warning(f"Planner streaming failed: {stream_error}, falling back to invoke")
+                final_state = planner_app.invoke(initial_state, config=config)
+
+            execution_time = time.time() - start_time
+            logger.info(f"Planner execution completed in {execution_time:.2f}s")
 
             # Extract the final answer
             if final_state["final_answer"]:
