@@ -30,10 +30,14 @@ class Config:
     MODEL_REASONER: str = os.getenv("MODEL_REASONER", os.getenv("REASONING_MODEL", "deepseek-reasoner"))
 
     # System Configuration
-    TIMEOUT_SECONDS: int = int(os.getenv("TIMEOUT_SECONDS", "30"))
+    TIMEOUT_SECONDS_CHAT: int = int(os.getenv("TIMEOUT_SECONDS_CHAT", "30"))  # Chat model timeout
+    TIMEOUT_SECONDS_REASONER: int = int(os.getenv("TIMEOUT_SECONDS_REASONER", "120"))  # Reasoner model timeout (longer for complex reasoning)
     MAX_TOOL_CALLS_PER_TURN: int = int(os.getenv("MAX_TOOL_CALLS_PER_TURN", "3"))
     MAX_ASK_USER_CYCLES: int = int(os.getenv("MAX_ASK_USER_CYCLES", "2"))
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
+
+    # Backward compatibility
+    TIMEOUT_SECONDS: int = TIMEOUT_SECONDS_CHAT
 
     # Data Paths
     LOG_DIR: str = os.getenv("LOG_DIR", "data/logs")

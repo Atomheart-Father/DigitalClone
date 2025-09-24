@@ -31,7 +31,11 @@ class LLMClient(ABC):
         self.model_name = model_name
         self.api_key = api_key or config.DEEPSEEK_API_KEY
         self.base_url = base_url or config.DEEPSEEK_BASE_URL
-        self.timeout = config.TIMEOUT_SECONDS
+        # Set timeout based on model type
+        if "reasoner" in model_name.lower():
+            self.timeout = config.TIMEOUT_SECONDS_REASONER
+        else:
+            self.timeout = config.TIMEOUT_SECONDS_CHAT
 
     @abstractmethod
     def generate(
