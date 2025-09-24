@@ -31,7 +31,12 @@ TOOL_META = {
         },
         "required": [],
         "additionalProperties": False
-    }
+    },
+    "strict": True,
+    "executor_default": "chat",
+    "complexity": "simple",
+    "arg_hint": "format参数可选值：date/time/datetime/iso/timestamp；tz参数可选值：local/utc。无必填参数，都有默认值。",
+    "caller_snippet": "用于任何涉及当前时间、日期或时间戳的查询。避免主观推测当前时间，必须使用此工具获取准确时间。"
 }
 
 

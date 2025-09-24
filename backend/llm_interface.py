@@ -100,7 +100,7 @@ class LLMClient(ABC):
 
             content = message.get("content", "")
 
-            # Handle function calls
+            # Handle function calls (legacy format)
             if "function_call" in message:
                 func_call = message["function_call"]
                 try:
@@ -109,9 +109,24 @@ class LLMClient(ABC):
                     arguments = {}
 
                 tool_calls.append(ToolCall(
+                    id=func_call.get("id"),
                     name=func_call.get("name", ""),
                     arguments=arguments
                 ))
+
+            # Handle tool_calls (new format)
+            if "tool_calls" in message:
+                for tool_call_data in message["tool_calls"]:
+                    try:
+                        arguments = json.loads(tool_call_data.get("function", {}).get("arguments", "{}"))
+                    except json.JSONDecodeError:
+                        arguments = {}
+
+                    tool_calls.append(ToolCall(
+                        id=tool_call_data.get("id"),
+                        name=tool_call_data.get("function", {}).get("name", ""),
+                        arguments=arguments
+                    ))
 
             # Handle finish reason
             finish_reason = choice.get("finish_reason")
@@ -394,57 +409,104 @@ class MockClient(LLMClient):
 
             # Handle JSON mode for planner
             if response_format and response_format.get("type") == "json_object":
-                # Return mock JSON plan in the expected format
+                # Return mock JSON plan for competitive analysis
                 response_content = '''{
-  "goal": "制定学习计划",
-  "success_criteria": "掌握编程和数学基础，能够独立解决问题",
+  "goal": "进行公司竞品两周调研并制定方案",
+  "success_criteria": "完成竞品技术优势分析，输出可执行的竞争策略建议",
   "todos": [
     {
       "id": "T1",
-      "title": "学习Python基础语法",
-      "why": "编程学习的基础",
+      "title": "调研竞品技术特点",
+      "why": "了解市场主要竞争对手的技术优势",
       "type": "tool",
-      "tool": "calculator",
-      "input": {"expression": "2+3"},
-      "expected_output": "计算结果",
+      "tool": "rag_search",
+      "input": {"query": "AI助手竞品技术分析", "k": 3},
+      "expected_output": "竞品技术特点总结",
       "needs": []
     },
     {
       "id": "T2",
-      "title": "练习数学计算",
-      "why": "加强数学能力",
-      "type": "chat",
+      "title": "分析当前时间",
+      "why": "确定调研的时间节点",
+      "type": "tool",
+      "tool": "datetime",
       "input": {},
-      "expected_output": "学习建议",
+      "expected_output": "当前日期时间",
+      "needs": []
+    },
+    {
+      "id": "T3",
+      "title": "制定竞争策略",
+      "why": "基于调研结果制定应对策略",
+      "type": "reason",
+      "input": {},
+      "expected_output": "竞争策略建议",
       "needs": []
     }
   ]
 }'''
                 tool_calls = []
             else:
-                # Simple mock responses based on content
-                if "算" in user_content or "计算" in user_content:
-                    # Mock calculator tool call
-                    response_content = "我来帮您计算这个问题。"
-                    tool_calls = [ToolCall(
-                        name="calculator",
-                        arguments={"expression": "2 + 3"}  # Mock expression
-                    )]
-                elif "时间" in user_content or "日期" in user_content:
-                    # Mock datetime tool call
-                    response_content = "我来告诉您当前的时间。"
-                    tool_calls = [ToolCall(
-                        name="datetime",
-                        arguments={"format": "iso"}
-                    )]
-                elif "计划" in user_content or "规划" in user_content:
-                    # Mock ask_user for complex planning
-                    response_content = "这是一个复杂的规划任务，我需要更多信息来为您制定最佳方案。请告诉我：\n1. 您的目标是什么？\n2. 时间限制是多久？\n3. 您有什么特殊要求吗？"
+                # Generate tool calls based on available functions
+                if functions:
+                    # Find the first available tool and generate a call for it
                     tool_calls = []
+                    response_content = "我来执行这个任务。"
+
+                    for func_spec in functions:
+                        tool_name = func_spec.get("name")
+                        if tool_name == "rag_search":
+                            tool_calls = [ToolCall(
+                                id="call_rag_001",
+                                name="rag_search",
+                                arguments={"query": "AI助手竞品技术分析", "k": 3}
+                            )]
+                            response_content = "我来搜索相关信息。"
+                            break
+                        elif tool_name == "datetime":
+                            tool_calls = [ToolCall(
+                                id="call_datetime_001",
+                                name="datetime",
+                                arguments={"format": "iso"}
+                            )]
+                            response_content = "我来告诉您当前的时间。"
+                            break
+                        elif tool_name == "calculator":
+                            tool_calls = [ToolCall(
+                                id="call_calc_001",
+                                name="calculator",
+                                arguments={"expression": "2 + 3"}
+                            )]
+                            response_content = "我来帮您计算这个问题。"
+                            break
+                        elif tool_name == "ask_user":
+                            # For ask_user, check if we need clarification
+                            if "竞品" in user_content or "调研" in user_content:
+                                tool_calls = [ToolCall(
+                                    id="call_ask_001",
+                                    name="ask_user",
+                                    arguments={"question": "为了进行准确的竞品调研，请提供更多信息：公司名称、竞品名称、调研重点等。"}
+                                )]
+                                response_content = "我需要更多信息来完成这个任务。"
+                                break
+                    else:
+                        # No matching tool found
+                        tool_calls = []
+                        response_content = "我需要使用工具来完成这个任务。"
                 else:
-                    # General response
-                    response_content = "这是MockClient的回复。在实际使用中，这里会是真实的AI回答。您的问题是：" + last_user_msg.content
-                    tool_calls = []
+                    # No functions provided, use simple content-based responses
+                    if "算" in user_content or "计算" in user_content:
+                        response_content = "我来帮您计算这个问题。"
+                        tool_calls = []
+                    elif "时间" in user_content or "日期" in user_content:
+                        response_content = "我来告诉您当前的时间。"
+                        tool_calls = []
+                    elif "计划" in user_content or "规划" in user_content:
+                        response_content = "这是一个复杂的规划任务，我需要更多信息来为您制定最佳方案。"
+                        tool_calls = []
+                    else:
+                        response_content = "这是MockClient的回复。在实际使用中，这里会是真实的AI回答。"
+                        tool_calls = []
 
         if stream:
             # Simulate streaming by yielding chunks

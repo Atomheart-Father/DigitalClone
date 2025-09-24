@@ -26,7 +26,12 @@ TOOL_META = {
         },
         "required": ["expression"],
         "additionalProperties": False
-    }
+    },
+    "strict": True,
+    "executor_default": "chat",
+    "complexity": "simple",
+    "arg_hint": "数学表达式字符串，支持加减乘除、括号、幂运算(^或**)、常用函数(sin/cos/sqrt/log等)。示例: '(12 + 7) * 3**2' 或 'sqrt(16) + log10(100)'",
+    "caller_snippet": "直接传入表达式字符串，无需额外格式。避免心算，必须用此工具进行任何数学计算。"
 }
 
 

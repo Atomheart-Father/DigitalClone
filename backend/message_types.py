@@ -21,6 +21,7 @@ class Role(str, Enum):
 
 class ToolCall(BaseModel):
     """Represents a tool function call."""
+    id: Optional[str] = Field(None, description="Unique identifier for the tool call")
     name: str = Field(..., description="Name of the tool to call")
     arguments: Dict[str, Any] = Field(default_factory=dict, description="Arguments for the tool call")
 
@@ -88,6 +89,11 @@ class ToolMeta(BaseModel):
     name: str = Field(..., description="Tool name")
     description: str = Field(..., description="Tool description")
     parameters: Dict[str, Any] = Field(..., description="JSON Schema for tool parameters")
+    strict: bool = Field(True, description="Whether parameters must strictly match schema")
+    executor_default: str = Field("chat", description="Default executor: auto, chat, or reasoner")
+    complexity: str = Field("simple", description="Complexity level: simple or complex")
+    arg_hint: str = Field("", description="Hints for parameter formatting and requirements")
+    caller_snippet: str = Field("", description="Special calling instructions and examples")
 
 
 class ToolExecutionResult(BaseModel):

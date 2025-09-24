@@ -111,7 +111,8 @@ class CLIApp:
         print("  :graph 显示图状态")
         print("  :route 显示路由决策")
         print("  :prompt [system|tools] 显示系统提示")
-        print("  :plan  显示当前计划")
+        print("  :plan  显示计划详情")
+        print("  :todo <id> 显示特定TODO详情")
         print("-" * 50)
 
     def _handle_special_command(self, command: str) -> bool:
@@ -161,6 +162,17 @@ class CLIApp:
             self._show_plan_status()
             return False
 
+        elif cmd.startswith('todo'):
+            # :todo <id> - show specific todo details
+            parts = cmd.split()
+            if len(parts) == 2:
+                todo_id = parts[1]
+                self._show_todo_details(todo_id)
+            else:
+                print("用法: :todo <id>")
+                print("示例: :todo T1")
+            return False
+
         else:
             print(f"未知命令: {command}")
             print("输入 :help 查看可用命令")
@@ -181,7 +193,8 @@ class CLIApp:
 
     def _show_tools(self):
         """Show available tools."""
-        tools = agent.router.registry.list_tools()
+        from tool_registry import registry
+        tools = registry.list_tools()
         if not tools:
             print("暂无可用工具")
             return
@@ -190,9 +203,14 @@ class CLIApp:
         for tool in tools:
             print(f"  • {tool.name}: {tool.description}")
             # Show parameters if available
-            if tool.parameters.get('properties'):
+            if hasattr(tool, 'parameters') and tool.parameters.get('properties'):
                 params = list(tool.parameters['properties'].keys())
                 print(f"    参数: {', '.join(params)}")
+            # Show executor info
+            if hasattr(tool, 'executor_default'):
+                print(f"    执行者: {tool.executor_default}")
+            if hasattr(tool, 'complexity'):
+                print(f"    复杂度: {tool.complexity}")
 
     def _show_history(self):
         """Show conversation history."""
@@ -242,50 +260,28 @@ class CLIApp:
             # Create initial state
             initial_state = create_initial_state(user_input)
 
-            # Quick route classification for streaming mode
-            if self.stream:
-                # For streaming, determine route first
-                from agent_core import AgentRouter
-                router = AgentRouter()
-                route_decision = router.route(user_input, None)
+            # Use full routing logic to determine execution mode
+            from agent_core import AgentRouter
+            from message_types import ConversationContext
 
-                if route_decision.engine == "reasoner":
-                    # Check if it's complex planning
-                    user_lower = user_input.lower()
-                    is_planning = any(keyword in user_lower for keyword in [
-                        '计划', '规划', '制定', '多步骤', '调研', '方案', '评估',
-                        '对比', '流程', '依赖', '阶段', '项目', '任务分解'
-                    ]) or len(user_input) > 100
+            router = AgentRouter()
+            context = ConversationContext(
+                conversation_history=self.conversation_history,
+                current_tools=[],
+                user_preferences={}
+            )
+            route_decision = router.route(user_input, context)
 
-                    if is_planning:
-                        # For now, use direct streaming for planning tasks in streaming mode
-                        # TODO: Implement true streaming for planner graph
-                        self._handle_direct_streaming(user_input)
-                    else:
-                        # Use direct streaming for simple reasoner tasks
-                        self._handle_direct_streaming(user_input)
-                else:
-                    # Use direct streaming for chat tasks
-                    self._handle_direct_streaming(user_input)
+            # For complex tasks (reasoner), always use planner graph
+            if route_decision.engine == "reasoner":
+                if self.stream:
+                    print(" (检测到复杂任务，使用规划模式)")
+                self._handle_planner_execution(user_input, route_decision)
             else:
-                # Check if it's a complex planning task for non-streaming mode
-                user_lower = user_input.lower()
-                is_complex_planning = any(keyword in user_lower for keyword in [
-                    '计划', '规划', '制定', '多步骤', '调研', '方案', '评估',
-                    '对比', '流程', '依赖', '阶段', '项目', '任务分解'
-                ]) or len(user_input) > 150  # Higher threshold for non-streaming
-
-                if is_complex_planning:
-                    # Use planner graph for complex tasks in non-streaming mode
-                    from agent_core import RouteDecision
-                    dummy_route_decision = RouteDecision(
-                        engine="reasoner",
-                        reason="Complex planning task - using planner graph",
-                        confidence=1.0
-                    )
-                    self._handle_planner_execution(user_input, dummy_route_decision)
+                # For simple tasks (chat), use streaming if enabled, otherwise regular graph
+                if self.stream:
+                    self._handle_direct_streaming(user_input)
                 else:
-                    # Handle regular graph execution
                     self._handle_graph_execution(initial_state)
 
         except Exception as e:
@@ -414,9 +410,10 @@ class CLIApp:
                         tool_calls_count += 1
 
                         # Execute tool immediately
-                        logger.info(f"Executing streaming tool call: {tool_call.name}")
+                        print(f"[执行工具: {tool_call.name}]", end="", flush=True)
                         try:
-                            tool_result = agent.registry.execute(tool_call.name, **tool_call.arguments)
+                            from tool_registry import registry
+                            tool_result = registry.execute(tool_call.name, **tool_call.arguments)
 
                             # Create tool result message
                             tool_message = Message(
@@ -657,24 +654,49 @@ class CLIApp:
         print("=" * 30)
 
     def _show_plan_status(self):
-        """Show current planner execution status."""
-        print("\n=== Planner 执行状态 ===")
+        """Show current plan details."""
+        print("\n=== 当前计划详情 ===")
 
-        # Since we don't have direct access to graph state in CLI,
-        # we'll show general planner status
-        print("Planner 模式: 支持复杂多步骤任务规划")
-        print("执行流程: classify_intent → sufficiency_check → planner_generate → todo_dispatch → aggregate_answer")
-        print("\n支持的任务类型:")
-        print("  • tool: 工具调用执行")
-        print("  • chat: 对话模型处理")
-        print("  • reason: 推理模型处理")
-        print("  • write: 写作任务")
-        print("  • research: 研究任务")
-        print("\n限制设置:")
-        print("  • 最大工具调用: 3 次/轮")
-        print("  • 最大问询次数: 2 次")
-        print("  • 最大深度: 1 层子规划")
-        print("\n状态信息: 使用 :graph 查看详细执行状态")
+        # This would ideally access the current graph state
+        # For now, show general information
+        print("Planner v1.0: 支持结构化任务规划与执行")
+        print("计划生成: Reasoner模型 + JSON模式")
+        print("执行分发: 智能路由到Chat/Reasoner执行者")
+        print("工具调用: 严格两步协议 (tool_calls → role:tool → 继续)")
+        print("\n计划包含字段:")
+        print("  • id: 唯一标识符")
+        print("  • title: 任务标题")
+        print("  • type: tool/chat/reason/write/research")
+        print("  • executor: auto/chat/reasoner")
+        print("  • tool: 工具名称 (type=tool时)")
+        print("  • input: 输入参数")
+        print("  • expected_output: 期望输出")
+        print("  • needs: 缺失信息需求")
+        print("\n执行者选择优先级:")
+        print("  1. TodoItem.executor (显式指定)")
+        print("  2. TOOL_META.executor_default")
+        print("  3. 复杂度自动判断")
+        print("  4. Chat (默认)")
+        print("=" * 30)
+
+    def _show_todo_details(self, todo_id: str):
+        """Show details for a specific todo item."""
+        print(f"\n=== TODO {todo_id} 详情 ===")
+
+        # This would access the current plan from graph state
+        # For now, show placeholder information
+        print(f"TODO ID: {todo_id}")
+        print("状态: 计划中 (实际运行时会显示执行状态)")
+        print("\n字段说明:")
+        print("  • title: 任务具体描述")
+        print("  • type: 执行类型 (tool/chat/reason/write/research)")
+        print("  • executor: 执行者 (chat/reasoner)")
+        print("  • tool: 工具名称 (type=tool时)")
+        print("  • input: 输入参数")
+        print("  • expected_output: 期望产出格式")
+        print("  • output: 实际执行结果")
+        print("  • needs: 缺失信息需求")
+        print("\n在实际运行中，此命令会显示该TODO的完整状态信息。")
         print("=" * 30)
 
     def _handle_clarification(self, clarification: str):

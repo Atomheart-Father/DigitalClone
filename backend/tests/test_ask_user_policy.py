@@ -13,12 +13,13 @@ import os
 backend_dir = os.path.join(os.path.dirname(__file__), '..')
 sys.path.insert(0, backend_dir)
 
+# Add graph directory for imports
+graph_dir = os.path.join(os.path.dirname(__file__), '..', '..', 'graph')
+sys.path.insert(0, graph_dir)
+
 from agent_core import AgentRouter
 from message_types import Message, Role
-import sys
-import os
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', '..', 'graph'))
-from nodes import _needs_user_clarification
+from ask_user_policy import needs_user_clarification
 
 
 class TestAskUserPolicy:
@@ -129,7 +130,7 @@ class TestAskUserPolicy:
         ]
 
         for response in ask_user_responses:
-            assert _needs_user_clarification(response), f"Should detect AskUser in response: {response}"
+            assert needs_user_clarification(response), f"Should detect AskUser in response: {response}"
 
         # AI responses that do NOT indicate AskUser
         no_ask_responses = [
@@ -141,7 +142,7 @@ class TestAskUserPolicy:
         ]
 
         for response in no_ask_responses:
-            assert not _needs_user_clarification(response), f"Should NOT detect AskUser in response: {response}"
+            assert not needs_user_clarification(response), f"Should NOT detect AskUser in response: {response}"
 
     def test_route_confidence_levels(self):
         """Test that routing provides appropriate confidence levels."""

@@ -30,7 +30,11 @@
 - **具体标题**: 简洁明了的任务描述
 - **执行理由**: 为什么需要这一步
 - **执行类型**: tool(工具调用)、chat(对话)、reason(推理)、write(写作)、research(研究)
-- **工具选择**: 如果是工具调用，指定具体工具
+- **工具选择**: 如果是工具调用，只能使用以下可用工具：
+  - calculator: 数学计算
+  - datetime: 时间和日期查询
+  - rag_search: 搜索相关信息和文档
+  - rag_upsert: 存储文档到知识库
 - **输入数据**: 执行所需的输入参数
 - **输出格式**: 期望的产出格式
 - **信息需求**: 需要用户提供的额外信息
@@ -44,10 +48,16 @@
 - 最多询问2次，避免无限循环
 
 ### 工具优先级
-1. **calculator**: 所有数学计算
-2. **datetime**: 时间和日期处理
-3. **web_search**: 信息检索和调研
-4. **file_read**: 文档和文件处理
+1. **web_search**: 搜索互联网最新信息
+2. **web_read**: 读取网页详细内容
+3. **file_read**: 读取本地文档
+4. **rag_search**: 搜索已存储的相关信息和历史知识
+5. **rag_upsert**: 存储新信息到知识库供后续使用
+6. **tabular_qa**: 表格数据分析和查询
+7. **python_exec**: 数据处理和计算脚本执行
+8. **markdown_writer**: 结果格式化和文档保存
+9. **calculator**: 数学计算和数值处理
+10. **datetime**: 时间和日期查询
 
 ### 计划优化
 - 步骤数量控制在3-7个
@@ -68,7 +78,7 @@
       "title": "具体可执行的步骤标题",
       "why": "这一步的必要性和作用",
       "type": "tool|chat|reason|write|research",
-      "tool": "calculator|datetime|web_search|file_read等",
+      "tool": "calculator|datetime|rag_search|rag_upsert",
       "input": {"参数名": "参数值"},
       "expected_output": "期望产出的格式描述",
       "needs": ["需要用户提供的具体信息"]

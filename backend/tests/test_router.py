@@ -10,8 +10,8 @@ import os
 backend_dir = os.path.join(os.path.dirname(__file__), '..')
 sys.path.insert(0, backend_dir)
 
-from ..agent_core import AgentRouter
-from ..message_types import ConversationContext, RouteDecision
+from agent_core import AgentRouter
+from message_types import ConversationContext, RouteDecision
 
 
 def test_router_initialization():

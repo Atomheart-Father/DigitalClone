@@ -38,9 +38,18 @@
             "type": "string",
             "description": "工具名称（当type=tool时必填）"
           },
+          "executor": {
+            "type": "string",
+            "enum": ["auto", "chat", "reasoner"],
+            "description": "指定执行者：auto(自动选择)、chat、reasoner"
+          },
           "input": {
             "type": "object",
             "description": "输入参数（传给工具或模型）"
+          },
+          "arg_template": {
+            "type": "object",
+            "description": "参数模板，用于复杂参数构造"
           },
           "expected_output": {
             "type": "string",

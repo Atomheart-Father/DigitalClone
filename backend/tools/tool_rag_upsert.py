@@ -118,11 +118,16 @@ TOOL_META = {
             },
             "meta": {
                 "type": "object",
-                "description": "附加元数据",
+                "description": "附加元数据，如URL、标题、作者等",
                 "default": {}
             }
         },
         "required": ["doc_id", "text"],
         "additionalProperties": False
-    }
+    },
+    "strict": True,
+    "executor_default": "chat",
+    "complexity": "simple",
+    "arg_hint": "doc_id必须唯一；text为待存储的文本；source影响存储分类；meta可选用于存储额外信息如URL或标题。",
+    "caller_snippet": "用于存储调研结果、网页内容或重要对话记录，便于后续rag_search检索。doc_id建议使用有意义的标识符。"
 }
