@@ -16,6 +16,7 @@ try:
     from memory.rolling_summary import RollingSummary
     from memory.profile_store import ProfileStore
     from memory.rag_store import RAGStore
+    from .compressor import TextCompressor
 except ImportError:
     # Fallback for testing
     Message = Dict
@@ -25,6 +26,7 @@ except ImportError:
     RollingSummary = None
     ProfileStore = None
     RAGStore = None
+    TextCompressor = None
 
 
 class ContextAssembler:
@@ -38,7 +40,8 @@ class ContextAssembler:
     def __init__(self, working_buffer: Optional['WorkingBuffer'] = None,
                  rolling_summary: Optional['RollingSummary'] = None,
                  profile_store: Optional['ProfileStore'] = None,
-                 rag_store: Optional['RAGStore'] = None):
+                 rag_store: Optional['RAGStore'] = None,
+                 compressor: Optional['TextCompressor'] = None):
         """
         Initialize context assembler.
 
@@ -47,11 +50,13 @@ class ContextAssembler:
             rolling_summary: Rolling summary instance
             profile_store: User profile store instance
             rag_store: RAG store instance
+            compressor: Text compressor instance
         """
         self.working_buffer = working_buffer or (WorkingBuffer() if WorkingBuffer else None)
         self.rolling_summary = rolling_summary or (RollingSummary() if RollingSummary else None)
         self.profile_store = profile_store or (ProfileStore() if ProfileStore else None)
         self.rag_store = rag_store or (RAGStore() if RAGStore else None)
+        self.compressor = compressor or (TextCompressor() if TextCompressor else None)
 
     def assemble(self, current_query: str, budget_tokens: int = 8000,
                 include_rag: bool = True) -> Dict[str, Any]:
@@ -200,6 +205,73 @@ class ContextAssembler:
         if self.profile_store:
             self.profile_store.upsert_profile_fact(key, value, confidence, "conversation", ttl_days)
 
+    def add_ask_user_response(self, question: str, answer: str, is_long_term: bool = False) -> None:
+        """
+        Add Ask User response to appropriate memory layers.
+
+        According to the design: Ask User answers go to Working Buffer for current turn,
+        and to Profile if they represent long-term preferences.
+
+        Args:
+            question: The question asked to user
+            answer: User's answer
+            is_long_term: Whether this represents a long-term user preference
+        """
+        # Always add to working buffer (current turn)
+        if self.working_buffer:
+            self.working_buffer.append_turn(
+                role="user",
+                content=f"Q: {question}\nA: {answer}",
+                turn_type="ask_user_response"
+            )
+
+        # Add to profile if it's a long-term preference
+        if is_long_term and self.profile_store:
+            # Extract key preference from Q&A
+            preference_key = self._extract_preference_key(question, answer)
+            if preference_key:
+                self.profile_store.upsert_profile_fact(
+                    key=preference_key,
+                    value=answer,
+                    confidence=0.8,
+                    source="ask_user_long_term",
+                    ttl_days=365  # Long-term preferences
+                )
+
+    def _extract_preference_key(self, question: str, answer: str) -> Optional[str]:
+        """
+        Extract preference key from Q&A for long-term storage.
+
+        Args:
+            question: User question
+            answer: User answer
+
+        Returns:
+            Preference key if this represents a long-term preference, None otherwise
+        """
+        question_lower = question.lower()
+        answer_lower = answer.lower()
+
+        # Check for preference indicators
+        preference_indicators = {
+            'style': ['风格', '样式', '格式', '偏好', '习惯'],
+            'format': ['格式', '输出格式', '显示方式'],
+            'language': ['语言', '语言偏好'],
+            'verbosity': ['详细程度', '简洁', '详细'],
+            'workflow': ['工作流', '流程', '步骤']
+        }
+
+        for pref_type, indicators in preference_indicators.items():
+            if any(indicator in question_lower for indicator in indicators):
+                return f"preference_{pref_type}"
+
+        # Check if answer indicates ongoing preference
+        ongoing_indicators = ['总是', '通常', '习惯', '偏好', '喜欢']
+        if any(indicator in answer_lower for indicator in ongoing_indicators):
+            return "general_preference"
+
+        return None
+
     def _create_system_message(self) -> Dict[str, Any]:
         """Create the system instruction message."""
         system_content = """你是DigitalClone，一个强大的AI助手。
@@ -253,27 +325,44 @@ class ContextAssembler:
         if not self.working_buffer:
             return []
 
-        messages = []
-        current_tokens = 0
-        max_chars = budget_tokens * 4
-
-        # Get recent turns (most recent first, but we'll reverse them)
+        # Get recent turns
         recent_turns = self.working_buffer.get_recent_turns(20)
 
-        for turn in reversed(recent_turns):  # Process in chronological order
-            content_chars = len(turn.content)
+        if not recent_turns:
+            return []
 
-            if current_tokens + (content_chars // 4) > budget_tokens:
-                # Would exceed budget, stop here
-                break
-
-            # Convert to Message format
+        # Convert turns to message format
+        messages = []
+        for turn in reversed(recent_turns):  # Chronological order
             msg = Message(
                 role=Role(turn.role) if hasattr(Role, turn.role.upper()) else Role.USER,
                 content=turn.content
             )
             messages.append(msg)
-            current_tokens += content_chars // 4
+
+        # Compress if over budget
+        total_chars = sum(len(str(getattr(msg, 'content', ''))) for msg in messages)
+        total_tokens = total_chars // 4
+
+        if total_tokens > budget_tokens and self.compressor:
+            # Use compressor for conversation history
+            compressed_messages, compression_result = self.compressor.compress_conversation_history(
+                [self._message_to_dict(msg) for msg in messages],
+                budget_tokens
+            )
+
+            # Convert back to Message objects
+            messages = []
+            for msg_dict in compressed_messages:
+                msg = Message(
+                    role=Role(msg_dict.get('role', 'user')),
+                    content=msg_dict.get('content', '')
+                )
+                messages.append(msg)
+
+            # Log compression metrics
+            print(f"🗜️ Compressed working buffer: {compression_result.original_tokens} → {compression_result.compressed_tokens} tokens "
+                  f"(ratio: {compression_result.compression_ratio:.2f}, quality: {compression_result.quality_score:.2f})")
 
         return messages
 
@@ -408,3 +497,10 @@ class ContextAssembler:
             return None
 
         return result.get('summary')
+
+    def _message_to_dict(self, message) -> Dict[str, Any]:
+        """Convert Message object to dictionary."""
+        return {
+            'role': getattr(message, 'role', 'user'),
+            'content': getattr(message, 'content', '')
+        }

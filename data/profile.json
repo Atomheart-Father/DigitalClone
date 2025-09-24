@@ -1,0 +1,13 @@
+{
+  "preference_style": {
+    "key": "preference_style",
+    "value": "我喜欢markdown格式",
+    "confidence": 0.8,
+    "source": "ask_user_long_term",
+    "created_at": 1758757718.807051,
+    "updated_at": 1758757718.807051,
+    "ttl_days": 365,
+    "access_count": 0,
+    "last_accessed": 1758757718.807051
+  }
+}
