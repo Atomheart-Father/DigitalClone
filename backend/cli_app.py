@@ -540,13 +540,12 @@ class CLIApp:
                                 print("\n操作取消")
                                 user_text = ""
 
-                            # 将输入写回状态并同步推进
+                            # 将输入写回状态 - graph的ask_user_interrupt_node会处理这些数据
                             accumulated_state["user_provided_input"] = {param: user_text for param in needs_info.get('needs', [])}
                             accumulated_state["needs_info"] = needs_info
 
-                            # 同步调用以处理用户输入并继续执行
-                            accumulated_state = planner_app.invoke(accumulated_state, config=config)
-                            logger.info("✅ User input injected and graph resumed")
+                            logger.info("✅ User input collected, continuing with streaming execution")
+                            # 不要重新invoke，继续streaming loop让graph自然继续执行
                             continue
 
                         # Check for completion

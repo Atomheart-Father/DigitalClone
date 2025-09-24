@@ -146,7 +146,12 @@ def build_planner_graph() -> StateGraph:
         lambda state: "ask_user_interrupt" if state.get("_route_to_ask_user") else "sufficiency_check"
     )
     graph.add_edge("sufficiency_check", "planner_generate")
-    graph.add_edge("planner_generate", "planner_gate")
+
+    # Conditional edge from planner_generate - check if user input is needed
+    graph.add_conditional_edges(
+        "planner_generate",
+        lambda state: "ask_user_interrupt" if state.get("needs_user_input") else "planner_gate"
+    )
 
     # Conditional edges from planner_gate
     graph.add_conditional_edges(

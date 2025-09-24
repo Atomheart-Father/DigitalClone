@@ -354,13 +354,21 @@ def ask_user_interrupt_node(state: AgentState) -> Dict[str, Any]:
         state["collected_user_params"] = user_input
         logger.info(f"✅ User parameters collected: {list(user_input.keys())}")
 
+        # If there's a pending plan from planner_generate_node, activate it
+        if state.get("_pending_plan"):
+            state["plan"] = state["_pending_plan"]
+            state.pop("_pending_plan")
+            logger.info(f"✅ Activated pending plan with {len(state['plan'])} todos")
+
         # Clear the user input state
         state.pop("user_provided_input", None)
         state.pop("needs_info", None)
 
-        # Resume planner execution - go back to todo dispatch
-        state["current_node"] = "todo_dispatch"
-        logger.info("▶️ RESUMING planner execution with user parameters")
+        # Clear needs_user_input flag to prevent further blocking
+        state.pop("needs_user_input", None)
+
+        # Let graph routing handle the next step - will go to todo_dispatch
+        logger.info("▶️ RESUMING planner execution with user parameters and activated plan")
 
     # Legacy handling for paused tool calls (still supported)
     elif state.get("paused_tool_call"):
@@ -584,25 +592,25 @@ def planner_generate_node(state: AgentState) -> Dict[str, Any]:
         try:
             final_response = chat_client.generate(
                 messages=[Message(role=Role.USER, content=json_prompt)],
-                stream=False,
+            stream=False,
                 response_format={"type": "json_object"}  # Only place using JSON mode
-            )
+        )
 
             content = final_response.content.strip()
             logger.info(f"📋 PHASE 3 RESPONSE ({len(content)} chars)")
 
-            try:
-                plan_data = json.loads(content)
+        try:
+            plan_data = json.loads(content)
                 logger.info("📋 PHASE 3 COMPLETE - JSON plan parsed successfully")
-            except json.JSONDecodeError as e:
+        except json.JSONDecodeError as e:
                 logger.error(f"❌ JSON parsing failed: {e}")
                 # Try to extract JSON
-                import re
-                json_match = re.search(r'\{.*\}', content, re.DOTALL)
-                if json_match:
+            import re
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            if json_match:
                     plan_data = json.loads(json_match.group())
                     logger.info("📋 Extracted JSON from response")
-                else:
+            else:
                     raise ValueError(f"Failed to parse JSON: {content[:200]}...")
 
         except Exception as e:
@@ -628,6 +636,45 @@ def planner_generate_node(state: AgentState) -> Dict[str, Any]:
             state["current_node"] = "ask_user_interrupt"
             state["execution_path"].append("planner_generate")
             logger.info(f"🛑 BLOCKING FOR USER INPUT: {ask_user_info.get('missing_params', [])}")
+
+            # 重要：即使需要用户输入，也要先生成plan，让ask_user_interrupt完成后能够继续执行
+            # 转换JSON计划为TodoItem对象（但暂时不设置到state["plan"]，等用户输入后再设置）
+        todos = []
+            for todo_data in plan_data.get("todos", []):
+                # 验证工具是否在白名单中
+                tool_name = todo_data.get("tool")
+                if tool_name:
+                    from backend.tool_prompt_builder import get_allowed_tools_whitelist
+                    allowed_tools = get_allowed_tools_whitelist()
+                    if tool_name not in allowed_tools:
+                        logger.warning(f"⚠️ 工具 '{tool_name}' 不在白名单中，跳过此任务")
+                        continue
+
+                # 验证必需字段
+                required_fields = ["id", "tool", "params", "depends_on", "why", "cost"]
+                if not all(field in todo_data for field in required_fields):
+                    logger.warning(f"⚠️ 任务缺少必需字段: {todo_data.get('id', 'unknown')}")
+                    continue
+
+            todos.append(TodoItem(
+                id=todo_data["id"],
+                    title=todo_data.get("title", f"执行{tool_name}"),
+                    why=todo_data["why"],
+                    type=TodoType.TOOL,
+                    tool=tool_name,
+                    executor="chat",  # 默认chat，之后可优化
+                    input_data=todo_data["params"],
+                    dependencies=todo_data["depends_on"],
+                    parallel_group=None,  # 暂时不支持并行
+                    execution_order=0,    # 暂时不支持并行
+                expected_output=todo_data.get("expected_output", ""),
+                    needs=[]  # Phase 3中needs应为空，由ask_user处理
+                ))
+
+            # 临时存储plan，等待用户输入完成后设置
+            state["_pending_plan"] = todos
+            state["execution_strategy"] = plan_data.get("strategy", "serial")
+
             return state
 
         # 正常处理：转换JSON计划为TodoItem对象
@@ -649,7 +696,7 @@ def planner_generate_node(state: AgentState) -> Dict[str, Any]:
                 continue
 
             todos.append(TodoItem(
-                id=todo_data["id"],
+                    id=todo_data["id"],
                 title=todo_data.get("title", f"执行{tool_name}"),
                 why=todo_data["why"],
                 type=TodoType.TOOL,
@@ -659,12 +706,12 @@ def planner_generate_node(state: AgentState) -> Dict[str, Any]:
                 dependencies=todo_data["depends_on"],
                 parallel_group=None,  # 暂时不支持并行
                 execution_order=0,    # 暂时不支持并行
-                expected_output=todo_data.get("expected_output", ""),
+                    expected_output=todo_data.get("expected_output", ""),
                 needs=[]  # Phase 3中needs应为空，由ask_user处理
             ))
 
         # 设置最终计划
-        state["plan"] = todos
+                state["plan"] = todos
         state["execution_strategy"] = plan_data.get("strategy", "serial")
 
         logger.info(f"🎯 PLAN COMPLETE - {len(todos)} todos (strategy: {state['execution_strategy']})")
@@ -1027,7 +1074,7 @@ def call_tool_with_llm(executor: str, tool_name: str, task_context: str, state: 
         arg_hint = tool_meta.arg_hint or ""
 
         # Create full context message for Chat
-        context_message = f"""任务：{task_context}
+    context_message = f"""任务：{task_context}
 
 请调用 {tool_name} 工具来完成这个任务。
 工具描述：{tool_desc}
@@ -1058,7 +1105,7 @@ def call_tool_with_llm(executor: str, tool_name: str, task_context: str, state: 
                     "strict": True,
                     "parameters": tool_meta.parameters
                 }
-            }, {
+                }, {
                 "type": "function",
                 "function": {
                     "name": "ask_user",
