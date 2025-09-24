@@ -68,6 +68,9 @@ class Config:
     MICRO_DECISION_MAX_TOKENS: int = int(os.getenv("MICRO_DECISION_MAX_TOKENS", "200"))  # Micro-decision token limit
     MICRO_DECISION_TIMEOUT: int = int(os.getenv("MICRO_DECISION_TIMEOUT", "30"))  # Micro-decision timeout (seconds)
 
+    # Reflective Replanning Limits
+    MAX_REPLANS_PER_TASK: int = int(os.getenv("MAX_REPLANS_PER_TASK", "2"))  # Maximum reflective replans per task
+
     @classmethod
     def ensure_log_directory(cls) -> Path:
         """Ensure the log directory exists and return its path."""

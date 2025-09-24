@@ -1576,9 +1576,17 @@ def reflective_replanning_check_node(state: AgentState) -> Dict[str, Any]:
         if "summary" in tool_result:
             info_size += len(str(tool_result["summary"]))
 
+    # Check replan count limit
+    current_replan_count = state.get("replan_count", 0)
+    if current_replan_count >= Config.MAX_REPLANS_PER_TASK:
+        logger.debug(f"Maximum replans per task reached ({current_replan_count}/{Config.MAX_REPLANS_PER_TASK}), skipping reflection")
+        state["execution_path"].append("reflective_check")
+        state["current_node"] = "reflective_check"
+        return state
+
     # Check if information size exceeds threshold
     if info_size >= Config.REFLECTIVE_REPLANNING_MIN_INFO_SIZE:
-        logger.info(f"🧠 DETECTED LARGE INFO GATHERING - {tool_name} returned ~{info_size} chars, triggering reflective replanning")
+        logger.info(f"🧠 DETECTED LARGE INFO GATHERING - {tool_name} returned ~{info_size} chars, triggering reflective replanning (replan {current_replan_count + 1}/{Config.MAX_REPLANS_PER_TASK})")
         state["trigger_reflective_replanning"] = True
         state["new_information_summary"] = _extract_information_summary(tool_result, tool_name)
     else:
@@ -1697,6 +1705,8 @@ def reflective_replanning_node(state: AgentState) -> Dict[str, Any]:
                     # Update the plan in state
                     state["plan"] = _create_todos_from_json(modified_plan_data)
                     state["plan_modified"] = True
+                    # Increment replan counter
+                    state["replan_count"] = state.get("replan_count", 0) + 1
                 else:
                     logger.warning("🧠 PLAN MODIFICATION FAILED - Could not parse JSON")
                     state["plan_modified"] = False

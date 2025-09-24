@@ -12,7 +12,7 @@ Schema：
  "ask_user": {
    "needed": true|false,
    "missing_params": ["..."],
-   "ask_message": "..."
+   "ask_message": "..."   // 直接展示给用户
  }
 }
 
