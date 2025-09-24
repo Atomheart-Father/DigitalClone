@@ -474,60 +474,68 @@ def planner_generate_node(state: AgentState) -> Dict[str, Any]:
 {tools_text}"""
 
     try:
-        # Use JSON mode for strict structured output
-        # 移除response_format参数，因为它会导致DeepSeek reasoner返回空内容
-        response = llm_client.generate(
-            messages=[Message(role=Role.USER, content=user_prompt)],
+        # Use Chat model directly for planning (Reasoner has compatibility issues)
+        logger.info("🎯 Using Chat model for planning (Reasoner has empty response issues)")
+        chat_client = create_llm_client("chat")
+
+        # Simplified planning prompt that works reliably
+        planning_prompt = f"""你是一个项目规划师。请制定执行计划。
+
+用户需求：{user_request}
+
+{tools_text}
+
+请输出JSON格式的计划：
+
+{{
+  "goal": "任务目标描述",
+  "success_criteria": "成功标准",
+  "todos": [
+    {{
+      "id": "T1",
+      "title": "步骤标题",
+      "why": "为什么需要这一步",
+      "type": "tool",
+      "tool": "工具名称",
+      "input": {{"参数": "值"}},
+      "expected_output": "预期输出",
+      "needs": []
+    }}
+  ]
+}}
+
+只输出JSON。"""
+
+        response = chat_client.generate(
+            messages=[Message(role=Role.USER, content=planning_prompt)],
             system_prompt=system_prompt,
-            stream=False
-            # response_format={"type": "json_object"}  # 移除：会导致DeepSeek reasoner返回空内容
+            stream=False,
+            response_format={"type": "json_object"}  # Chat model supports this reliably
         )
 
-        # Parse the JSON response
+        # Parse the JSON response (Chat model should return valid JSON with response_format)
         content = response.content.strip()
         logger.debug(f"Raw planner response: {content[:500]}...")
 
-        # Try to clean and parse JSON
-        plan_data = None
-
-        # First, try direct JSON parsing
         try:
             plan_data = json.loads(content)
-            logger.info("Direct JSON parsing successful")
+            logger.info("✅ Chat model JSON parsing successful")
         except json.JSONDecodeError as e:
-            logger.warning(f"Direct JSON parsing failed: {e}")
+            logger.error(f"❌ Chat model JSON parsing failed: {e}")
+            logger.error(f"Response content: {content}")
 
-            # Try to extract JSON from text using regex (more robust)
+            # Try to extract and fix JSON as fallback
             import re
             json_match = re.search(r'\{.*\}', content, re.DOTALL)
             if json_match:
-                extracted_json = json_match.group()
-                logger.info(f"Extracted JSON length: {len(extracted_json)} chars")
-
                 try:
+                    extracted_json = json_match.group()
                     plan_data = json.loads(extracted_json)
-                    logger.info("JSON extraction successful")
-                except json.JSONDecodeError as recovery_error:
-                    logger.error(f"JSON extraction failed: {recovery_error}")
-
-                    # Try to fix common JSON issues
-                    try:
-                        # Remove trailing commas before closing braces/brackets
-                        fixed_json = re.sub(r',(\s*[}\]])', r'\1', extracted_json)
-                        plan_data = json.loads(fixed_json)
-                        logger.info("JSON fixed and parsed successfully")
-                    except json.JSONDecodeError:
-                        logger.error("JSON fixing also failed")
-                        # Log the problematic content for debugging
-                        logger.error(f"Problematic content: {extracted_json[-200:]}")
-                        raise ValueError(f"Could not parse JSON response even after fixing")
-
+                    logger.info("✅ JSON extracted and parsed from response")
+                except json.JSONDecodeError:
+                    raise ValueError(f"Failed to parse JSON from Chat model response: {content[:200]}...")
             else:
-                logger.error(f"No JSON structure found in response: {content[:200]}...")
-                raise ValueError(f"No JSON found in response: {content[:200]}...")
-
-        if plan_data is None:
-            raise ValueError("Failed to parse plan data from response")
+                raise ValueError(f"No JSON found in Chat model response: {content[:200]}...")
 
         # Validate JSON against schema (basic validation)
         required_keys = ["goal", "success_criteria", "todos"]
