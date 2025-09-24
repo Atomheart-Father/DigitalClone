@@ -7,7 +7,7 @@ This module contains all the node functions that make up the execution graph.
 import logging
 import json
 import re
-from typing import Dict, Any, List
+from typing import Dict, Any, List, Optional
 
 import sys
 import os
@@ -446,8 +446,29 @@ def planner_generate_node(state: AgentState) -> Dict[str, Any]:
     # Create LLM client
     llm_client = create_llm_client("reasoner")
 
-    # 使用极简工具信息
-    tools_text = "可用工具：calculator（计算）、datetime（时间）、rag_search（搜索）、web_search（上网）、file_read（读文件）"
+    # 获取完整的工具信息和executor选项
+    tools_info = []
+    for tool_name in registry.list_tools():
+        tool_meta = registry.get_tool_meta(tool_name)
+        if tool_meta:
+            # 确定默认executor
+            default_executor = "chat"
+            if tool_meta.executor_default == "reasoner" or tool_meta.complexity == "complex":
+                default_executor = "reasoner"
+
+            # 创建纯字典，避免ToolMeta对象的序列化问题
+            tools_info.append({
+                "name": tool_name,
+                "description": tool_meta.description[:100],  # 限制长度
+                "default_executor": default_executor,
+                "complexity": tool_meta.complexity
+            })
+
+    # 构建详细的工具信息文本
+    tools_text = "可用工具和执行器：\n"
+    for tool in tools_info:
+        tools_text += f"- {tool['name']}（{tool['description']}）默认执行器：{tool['default_executor']}，复杂度：{tool['complexity']}\n"
+    tools_text += "\n执行器说明：\n- chat：适合简单任务，响应快\n- reasoner：适合复杂推理，响应慢但准确"
 
     # 使用从测试中验证成功的prompt格式
     user_prompt = f"""用户任务：{user_request}
@@ -478,12 +499,16 @@ def planner_generate_node(state: AgentState) -> Dict[str, Any]:
         logger.info("🎯 Using Chat model for planning (Reasoner has empty response issues)")
         chat_client = create_llm_client("chat")
 
-        # Simplified planning prompt that works reliably
-        planning_prompt = f"""你是一个项目规划师。请制定执行计划。
+        # Simplified planning prompt that works reliably with executor selection
+        planning_prompt = f"""你是一个项目规划师。请制定执行计划，并为每个工具任务选择合适的执行器。
 
 用户需求：{user_request}
 
 {tools_text}
+
+重要：对于每个工具任务，你必须选择"executor"字段，可选值："chat"或"reasoner"。
+- chat：快速响应，适合简单任务
+- reasoner：深度推理，适合复杂任务，但响应较慢
 
 请输出JSON格式的计划：
 
@@ -497,6 +522,7 @@ def planner_generate_node(state: AgentState) -> Dict[str, Any]:
       "why": "为什么需要这一步",
       "type": "tool",
       "tool": "工具名称",
+      "executor": "chat",
       "input": {{"参数": "值"}},
       "expected_output": "预期输出",
       "needs": []
@@ -679,6 +705,27 @@ def resolve_executor(todo: TodoItem) -> str:
     return "chat"
 
 
+def truncate_text(text: str, max_chars: int, suffix: str = "...") -> str:
+    """
+    Truncate text to max_chars, adding suffix if truncated.
+
+    Args:
+        text: Text to truncate
+        max_chars: Maximum character count
+        suffix: Suffix to add if truncated
+
+    Returns:
+        Truncated text
+    """
+    if len(text) <= max_chars:
+        return text
+    # Ensure we don't go negative
+    keep_chars = max(0, max_chars - len(suffix))
+    return text[:keep_chars] + suffix
+
+
+
+
 def call_tool_with_llm(executor: str, tool_name: str, task_context: str, state: AgentState) -> Dict[str, Any]:
     """
     Call a tool using the specified executor with proper two-step protocol.
@@ -693,12 +740,36 @@ def call_tool_with_llm(executor: str, tool_name: str, task_context: str, state: 
     # Get appropriate system prompt
     system_prompt = load_system_prompt("chat" if executor == "chat" else "reasoner", executor)
 
-    # Create execution context message
-    context_message = f"""任务：{task_context}
+    # For Reasoner executor, provide only the specific tool information
+    # For Chat executor, provide full context as before
+    if executor == "reasoner":
+        # Limit all inputs for Reasoner to prevent empty responses
+        task_context = truncate_text(task_context, 200)
+        tool_desc = truncate_text(tool_meta.description, 150)
+        arg_hint = truncate_text(tool_meta.arg_hint or "", 100)
+
+        # Create focused context for Reasoner - only this specific tool
+        context_message = f"""任务：{task_context}
+
+你可以使用以下工具来完成任务：
+- {tool_name}：{tool_desc}
+  参数提示：{arg_hint}
+
+请调用 {tool_name} 工具来完成这个任务。只允许调用这个工具和 ask_user 工具（如果需要用户信息）。
+"""
+        logger.info(f"Reasoner tool execution: task_context={len(task_context)} chars, "
+                   f"tool_desc={len(tool_desc)} chars, arg_hint={len(arg_hint)} chars")
+    else:
+        # Chat executor gets full context
+        tool_desc = tool_meta.description
+        arg_hint = tool_meta.arg_hint or ""
+
+        # Create full context message for Chat
+        context_message = f"""任务：{task_context}
 
 请调用 {tool_name} 工具来完成这个任务。
-工具描述：{tool_meta.description}
-参数提示：{tool_meta.arg_hint}
+工具描述：{tool_desc}
+参数提示：{arg_hint}
 
 只允许调用 {tool_name} 工具和 ask_user 工具（如果需要澄清信息）。
 """
@@ -716,11 +787,12 @@ def call_tool_with_llm(executor: str, tool_name: str, task_context: str, state: 
     while retry_count <= max_retries:
         try:
             # Step 1: Generate tool call
-            response = llm_client.generate(
-                messages=execution_messages,
-                functions=[{
+            # For Reasoner, provide only the specific tool function definition
+            # For Chat, provide both the tool and ask_user functions
+            if executor == "reasoner":
+                functions = [{
                     "name": tool_name,
-                    "description": tool_meta.description,
+                    "description": tool_desc,  # Use truncated description for Reasoner
                     "parameters": tool_meta.parameters
                 }, {
                     "name": "ask_user",
@@ -732,7 +804,27 @@ def call_tool_with_llm(executor: str, tool_name: str, task_context: str, state: 
                         },
                         "required": ["question"]
                     }
-                }],
+                }]
+            else:
+                functions = [{
+                    "name": tool_name,
+                    "description": tool_meta.description,  # Full description for Chat
+                    "parameters": tool_meta.parameters
+                }, {
+                    "name": "ask_user",
+                    "description": "向用户询问缺失的信息",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "question": {"type": "string", "description": "要问用户的问题"}
+                        },
+                        "required": ["question"]
+                    }
+                }]
+
+            response = llm_client.generate(
+                messages=execution_messages,
+                functions=functions,
                 stream=False
             )
 
@@ -847,20 +939,24 @@ def todo_dispatch_node(state: AgentState) -> Dict[str, Any]:
 
     try:
         if todo.type == TodoType.TOOL:
-            # For tool execution, set up the tool call for the tool_exec node
+            # Tool and executor should already be decided in planning phase
             if not todo.tool:
-                logger.error(f"Tool todo {todo.id} missing tool name")
-                todo.output = f"错误：工具调用缺少工具名称"
+                logger.error(f"Tool todo {todo.id} missing tool name from planning phase")
+                todo.output = f"错误：规划阶段未指定工具名称"
                 state["current_todo"] = current_idx + 1
             else:
+                # Executor should be set in planning phase, fallback to auto-resolution
+                executor = todo.executor if todo.executor and todo.executor != "auto" else resolve_executor(todo)
+
                 # Set up tool call for tool_exec node
                 state["pending_tool_call"] = {
                     "tool": todo.tool,
                     "input_data": todo.input_data or {},
                     "todo_id": todo.id,
-                    "executor": resolve_executor(todo)  # Store executor info
+                    "executor": executor
                 }
-                logger.info(f"Prepared tool call for {todo.tool} with executor {resolve_executor(todo)}")
+                logger.info(f"Prepared tool call for {todo.tool} with executor {executor} "
+                           f"(decided in planning phase)")
                 # Don't advance current_todo yet - wait for tool_exec completion
 
         elif todo.type == TodoType.CHAT:
@@ -931,11 +1027,48 @@ def todo_dispatch_node(state: AgentState) -> Dict[str, Any]:
     return state
 
 
+def log_execution_metrics(state: AgentState) -> None:
+    """
+    Log execution metrics for observability.
+
+    Args:
+        state: Current agent state with metrics
+    """
+    metrics = state.get("metrics", {})
+
+    if not metrics:
+        logger.info("No execution metrics recorded")
+        return
+
+    # Log micro-reasoning metrics
+    micro_calls = metrics.get("reasoner_micro_calls", 0)
+    micro_empty = metrics.get("reasoner_micro_empty", 0)
+    micro_fallback = metrics.get("reasoner_micro_fallback", 0)
+
+    if micro_calls > 0:
+        empty_rate = micro_empty / micro_calls * 100 if micro_calls > 0 else 0
+        fallback_rate = micro_fallback / micro_calls * 100 if micro_calls > 0 else 0
+
+        logger.info(f"Micro-reasoning metrics: calls={micro_calls}, empty={micro_empty} ({empty_rate:.1f}%), "
+                   f"fallback={micro_fallback} ({fallback_rate:.1f}%)")
+
+    # Log execution summary
+    plan_size = len(state.get("plan", []))
+    completed_todos = sum(1 for todo in state.get("plan", []) if todo.output)
+    tool_calls = state.get("tool_call_count", 0)
+
+    logger.info(f"Execution summary: plan_size={plan_size}, completed={completed_todos}, "
+               f"tool_calls={tool_calls}, execution_path={state.get('execution_path', [])}")
+
+
 def aggregate_answer_node(state: AgentState) -> Dict[str, Any]:
     """
     Aggregate results from all completed todos into final answer.
     """
     logger.info("Aggregating final answer...")
+
+    # Log execution metrics
+    log_execution_metrics(state)
 
     # Collect all assistant responses from the execution
     assistant_responses = [

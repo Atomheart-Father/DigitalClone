@@ -36,6 +36,12 @@ class Config:
     MAX_ASK_USER_CYCLES: int = int(os.getenv("MAX_ASK_USER_CYCLES", "2"))
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
+    # Reasoner Micro-Inference Configuration
+    REASONER_MICRO_CONNECT_TIMEOUT: int = int(os.getenv("REASONER_MICRO_CONNECT_TIMEOUT", "10"))  # Connect timeout for micro-inference
+    REASONER_MICRO_READ_TIMEOUT: int = int(os.getenv("REASONER_MICRO_READ_TIMEOUT", "30"))  # Read timeout for micro-inference
+    REASONER_MICRO_MAX_INPUT_CHARS: int = int(os.getenv("REASONER_MICRO_MAX_INPUT_CHARS", "200"))  # Max input chars for micro-inference
+    REASONER_MICRO_MAX_CANDIDATES: int = int(os.getenv("REASONER_MICRO_MAX_CANDIDATES", "3"))  # Max candidates for micro-inference
+
     # Backward compatibility
     TIMEOUT_SECONDS: int = TIMEOUT_SECONDS_CHAT
 

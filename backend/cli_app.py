@@ -11,21 +11,25 @@ import argparse
 import logging
 from typing import List, Optional
 
+# 直接使用绝对导入（start.py已设置sys.path）
 import config
 import message_types
 import logger
 
-# Import graph modules with proper error handling
+# Import graph modules (start.py已设置sys.path)
 try:
-    from graph import graph_app, planner_app
-    from graph.state import create_initial_state
-    from tool_prompt_builder import load_system_prompt
+    import graph
+    import tool_prompt_builder
+    graph_app = graph.graph_app
+    planner_app = graph.planner_app
+    create_initial_state = graph.state.create_initial_state
+    load_system_prompt = tool_prompt_builder.load_system_prompt
     GRAPH_AVAILABLE = True
+    logger.logger.info("Graph modules imported successfully")
 except ImportError as e:
     logger.logger.warning(f"Graph modules not available: {e}")
     GRAPH_AVAILABLE = False
-    # Fallback imports for compatibility
-    from tool_prompt_builder import load_system_prompt
+    load_system_prompt = None
 
 # 为了兼容性，创建别名
 config = config.config
@@ -487,7 +491,10 @@ class CLIApp:
             initial_state = create_initial_state(user_input)
 
             # Execute planner graph with heartbeat monitoring
-            config = {"configurable": {"thread_id": f"planner-{user_input[:20]}"}}  # Use input prefix for thread ID
+            config = {
+                "configurable": {"thread_id": f"planner-{user_input[:20]}"},  # Use input prefix for thread ID
+                "recursion_limit": 100  # Increase from default 25 to handle complex planning
+            }
 
             # Hotfix-4: Add heartbeat logging for planner execution monitoring
             import time

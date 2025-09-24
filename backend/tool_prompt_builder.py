@@ -73,15 +73,15 @@ def build_tool_prompts() -> Dict[str, Any]:
 """
             tools_text_reasoner_parts.append(reasoner_tool_text)
 
-        # Index for quick lookup
+        # Index for quick lookup - ensure all values are basic types (no ToolMeta objects)
         tool_name_index[tool_meta.name] = {
-            "description": tool_meta.description,
-            "parameters": tool_meta.parameters,
-            "executor_default": tool_meta.executor_default,
-            "complexity": tool_meta.complexity,
-            "arg_hint": tool_meta.arg_hint,
-            "caller_snippet": tool_meta.caller_snippet,
-            "strict": tool_meta.strict
+            "description": str(tool_meta.description),
+            "parameters": dict(tool_meta.parameters),  # Deep copy to avoid references
+            "executor_default": str(tool_meta.executor_default),
+            "complexity": str(tool_meta.complexity),
+            "arg_hint": str(tool_meta.arg_hint or ""),
+            "caller_snippet": str(tool_meta.caller_snippet or ""),
+            "strict": bool(tool_meta.strict)
         }
 
     # Combine text descriptions

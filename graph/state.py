@@ -99,6 +99,9 @@ class AgentState(TypedDict):
     retries: int
     max_retries: int
 
+    # Metrics and observability
+    metrics: Dict[str, Any]  # Runtime metrics collection
+
     # Status tracking
     current_node: str
     execution_path: List[str]

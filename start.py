@@ -16,9 +16,14 @@ sys.path.insert(0, project_root)
 backend_dir = os.path.join(project_root, 'backend')
 sys.path.insert(0, backend_dir)
 
+# 添加graph目录到Python路径
+graph_dir = os.path.join(project_root, 'graph')
+sys.path.insert(0, graph_dir)
+
 # 现在可以安全导入我们的模块
 try:
-    from cli_app import main
+    import cli_app
+    main = cli_app.main
 except ImportError as e:
     print(f"Import error: {e}")
     import traceback
