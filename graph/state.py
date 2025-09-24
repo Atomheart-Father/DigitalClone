@@ -6,6 +6,7 @@ This module defines the typed state used throughout the graph execution.
 
 from typing import List, Optional, Dict, Any, TypedDict
 from enum import Enum
+from dataclasses import dataclass
 
 import sys
 from pathlib import Path
@@ -26,7 +27,43 @@ class Route(str, Enum):
     """Route enumeration."""
     CHAT = "chat"
     REASONER = "reasoner"
+    PLANNER = "planner"
+    AUTO_RAG = "auto_rag"
     UNDECIDED = "undecided"
+
+
+class TodoType(str, Enum):
+    """Todo item types."""
+    TOOL = "tool"
+    CHAT = "chat"
+    REASON = "reason"
+    WRITE = "write"
+    RESEARCH = "research"
+
+
+@dataclass
+class TodoItem:
+    """Todo item structure for planning."""
+    id: str
+    title: str
+    why: str
+    type: TodoType
+    tool: Optional[str] = None
+    input_data: Optional[Dict[str, Any]] = None
+    expected_output: str = ""
+    needs: List[str] = None  # Information gaps that need user clarification
+
+    def __post_init__(self):
+        if self.needs is None:
+            self.needs = []
+
+
+@dataclass
+class Limits:
+    """Limits and constraints for planning."""
+    max_tools_per_turn: int = 3
+    max_ask_cycles: int = 2
+    max_depth: int = 1
 
 
 class AgentState(TypedDict):
@@ -39,6 +76,11 @@ class AgentState(TypedDict):
     route: Route
     route_decision: Optional[RouteDecision]
 
+    # Planning state
+    plan: List[TodoItem]
+    current_todo: Optional[int]  # Index of current todo being executed
+    depth_budget: int
+
     # Tool execution state
     pending_tool_call: Optional[Dict[str, Any]]
     tool_call_count: int
@@ -46,6 +88,7 @@ class AgentState(TypedDict):
     # AskUser state
     awaiting_user: bool
     user_input_buffer: Optional[str]
+    sufficiency: str  # "unknown", "enough", "missing"
 
     # Control flow
     retries: int
@@ -58,6 +101,7 @@ class AgentState(TypedDict):
     # Context and metadata
     context: Dict[str, Any]
     session_id: Optional[str]
+    limits: Limits
 
     # Final output
     final_answer: Optional[str]
@@ -90,16 +134,21 @@ def create_initial_state(user_input: str, session_id: Optional[str] = None) -> A
         messages=[initial_message],
         route=Route.UNDECIDED,
         route_decision=None,
+        plan=[],
+        current_todo=None,
+        depth_budget=1,
         pending_tool_call=None,
         tool_call_count=0,
         awaiting_user=False,
         user_input_buffer=None,
+        sufficiency="unknown",
         retries=0,
         max_retries=3,
         current_node="user_input",
         execution_path=["user_input"],
         context={},
         session_id=session_id,
+        limits=Limits(),
         final_answer=None,
         should_end=False
     )

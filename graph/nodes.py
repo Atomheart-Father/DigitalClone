@@ -281,6 +281,275 @@ def end_node(state: AgentState) -> Dict[str, Any]:
     return state
 
 
+# ===== PLANNER NODES =====
+
+def classify_intent_node(state: AgentState) -> Dict[str, Any]:
+    """
+    Classify user intent and choose execution pipeline.
+
+    Routes to: chat, planner, auto_rag
+    """
+    logger.info("Classifying user intent...")
+
+    if not state["messages"]:
+        raise ValueError("No messages in state")
+
+    user_message = None
+    for msg in reversed(state["messages"]):
+        if msg.role.value == "user":
+            user_message = msg
+            break
+
+    if not user_message:
+        raise ValueError("No user message found")
+
+    user_input = user_message.content.lower()
+
+    # Check for explicit auto_rag triggers
+    if any(keyword in user_input for keyword in ['自动扩充', '整理对话', '总结对话', 'auto_rag']):
+        route = Route.AUTO_RAG
+        reason = "用户明确请求自动知识扩充"
+    # Check for planning keywords
+    elif any(keyword in user_input for keyword in [
+        '计划', '规划', '制定', '多步骤', '调研', '方案', '评估',
+        '对比', '流程', '依赖', '阶段', '项目', '任务分解'
+    ]) or len(user_input) > 100:  # Long inputs likely need planning
+        route = Route.PLANNER
+        reason = "检测到复杂规划任务特征"
+    else:
+        route = Route.CHAT
+        reason = "简单对话任务，使用chat模型"
+
+    logger.info(f"Intent classification: {route.value} ({reason})")
+
+    state["route"] = route
+    state["execution_path"].append("classify_intent")
+    state["current_node"] = "classify_intent"
+
+    return state
+
+
+def sufficiency_check_node(state: AgentState) -> Dict[str, Any]:
+    """
+    Check if we have sufficient information to proceed with planning.
+
+    This is a simplified version - in production, you'd use more sophisticated analysis.
+    """
+    logger.info("Checking information sufficiency...")
+
+    # For now, assume we have enough information
+    # In production, this would analyze the plan and check for missing prerequisites
+    state["sufficiency"] = "enough"
+    state["execution_path"].append("sufficiency_check")
+    state["current_node"] = "sufficiency_check"
+
+    return state
+
+
+def planner_generate_node(state: AgentState) -> Dict[str, Any]:
+    """
+    Generate a structured plan using the reasoner model.
+    """
+    logger.info("Generating structured plan...")
+
+    if not state["messages"]:
+        raise ValueError("No messages in state")
+
+    # Get the user request
+    user_request = ""
+    for msg in state["messages"]:
+        if msg.role.value == "user":
+            user_request = msg.content
+            break
+
+    # Use reasoner to generate plan
+    llm_client = create_llm_client("reasoner")
+
+    system_prompt = """你是一个专业的项目规划师。用户会提出一个复杂任务，你需要将其分解为具体的、可执行的步骤。
+
+请以JSON格式输出计划，格式如下：
+{
+  "goal": "任务目标描述",
+  "success_criteria": "成功标准",
+  "todos": [
+    {
+      "id": "T1",
+      "title": "具体步骤标题",
+      "why": "为什么需要这一步",
+      "type": "tool|chat|reason|write|research",
+      "tool": "工具名称（如果type=tool）",
+      "input": "输入数据（可选）",
+      "expected_output": "期望的输出格式",
+      "needs": ["需要的用户信息"]
+    }
+  ]
+}
+
+只输出JSON，不要其他解释。"""
+
+    prompt = f"用户任务：{user_request}\n\n请制定详细的执行计划。"
+
+    try:
+        response = llm_client.generate(
+            messages=[Message(role=Role.USER, content=prompt)],
+            system_prompt=system_prompt,
+            stream=False
+        )
+
+        # Parse the JSON response
+        import json
+        plan_data = json.loads(response.content.strip())
+
+        # Convert to TodoItem objects
+        todos = []
+        for todo_data in plan_data.get("todos", []):
+            todos.append(TodoItem(
+                id=todo_data["id"],
+                title=todo_data["title"],
+                why=todo_data["why"],
+                type=TodoType(todo_data["type"]),
+                tool=todo_data.get("tool"),
+                input_data=todo_data.get("input"),
+                expected_output=todo_data.get("expected_output", ""),
+                needs=todo_data.get("needs", [])
+            ))
+
+        state["plan"] = todos
+        logger.info(f"Generated plan with {len(todos)} todos")
+
+    except Exception as e:
+        logger.error(f"Plan generation failed: {e}")
+        # Fallback to empty plan
+        state["plan"] = []
+
+    state["execution_path"].append("planner_generate")
+    state["current_node"] = "planner_generate"
+
+    return state
+
+
+def planner_gate_node(state: AgentState) -> Dict[str, Any]:
+    """
+    Gate node that checks if we can proceed with plan execution.
+    """
+    logger.info("Checking planner gate...")
+
+    # Check if we have missing information
+    has_missing_info = any(
+        todo.needs for todo in state["plan"]
+    ) if state["plan"] else False
+
+    if has_missing_info and state["limits"].max_ask_cycles > 0:
+        state["sufficiency"] = "missing"
+        state["awaiting_user"] = True
+    else:
+        state["sufficiency"] = "enough"
+        state["awaiting_user"] = False
+
+    state["execution_path"].append("planner_gate")
+    state["current_node"] = "planner_gate"
+
+    return state
+
+
+def todo_dispatch_node(state: AgentState) -> Dict[str, Any]:
+    """
+    Dispatch the current todo item for execution.
+    """
+    logger.info("Dispatching todo item...")
+
+    if not state["plan"]:
+        logger.warning("No plan available for dispatch")
+        state["should_end"] = True
+        return state
+
+    # Get current todo
+    current_idx = state.get("current_todo", 0)
+    if current_idx >= len(state["plan"]):
+        # All todos completed
+        state["should_end"] = True
+        state["current_node"] = "end"
+        return state
+
+    todo = state["plan"][current_idx]
+    state["current_todo"] = current_idx
+
+    logger.info(f"Dispatching todo {todo.id}: {todo.title} (type: {todo.type.value})")
+
+    # Route based on todo type
+    if todo.type == TodoType.TOOL:
+        # Prepare tool call
+        state["pending_tool_call"] = {
+            "name": todo.tool,
+            "arguments": todo.input_data or {},
+            "todo_id": todo.id
+        }
+    elif todo.type == TodoType.CHAT:
+        # Use chat model
+        llm_client = create_llm_client("chat")
+        response = llm_client.generate(
+            messages=state["messages"],
+            system_prompt=f"执行任务：{todo.title}\n目标：{todo.expected_output}",
+            stream=False
+        )
+        # Add response to messages
+        assistant_msg = Message(role=Role.ASSISTANT, content=response.content)
+        state["messages"].append(assistant_msg)
+
+    elif todo.type in [TodoType.REASON, TodoType.WRITE, TodoType.RESEARCH]:
+        # Use reasoner model
+        llm_client = create_llm_client("reasoner")
+        response = llm_client.generate(
+            messages=state["messages"],
+            system_prompt=f"执行任务：{todo.title}\n目标：{todo.expected_output}",
+            stream=False
+        )
+        # Add response to messages
+        assistant_msg = Message(role=Role.ASSISTANT, content=response.content)
+        state["messages"].append(assistant_msg)
+
+    # Move to next todo
+    state["current_todo"] = current_idx + 1
+
+    state["execution_path"].append("todo_dispatch")
+    state["current_node"] = "todo_dispatch"
+
+    return state
+
+
+def aggregate_answer_node(state: AgentState) -> Dict[str, Any]:
+    """
+    Aggregate results from all completed todos into final answer.
+    """
+    logger.info("Aggregating final answer...")
+
+    # Collect all assistant responses from the execution
+    assistant_responses = [
+        msg.content for msg in state["messages"]
+        if msg.role.value == "assistant"
+    ]
+
+    # Create a comprehensive answer
+    if state["plan"]:
+        final_answer = f"## 执行完成\n\n"
+        for i, todo in enumerate(state["plan"]):
+            final_answer += f"### {todo.title}\n{todo.why}\n\n"
+
+        final_answer += f"## 结果汇总\n\n"
+        for i, response in enumerate(assistant_responses[-len(state["plan"]):]):
+            final_answer += f"**步骤{i+1}结果：**\n{response}\n\n"
+    else:
+        final_answer = "任务执行完成。" + " ".join(assistant_responses[-1:])
+
+    state["final_answer"] = final_answer
+    state["should_end"] = True
+
+    state["execution_path"].append("aggregate_answer")
+    state["current_node"] = "aggregate_answer"
+
+    return state
+
+
 def _needs_user_clarification(content: str) -> bool:
     """
     Determine if the response content indicates a need for user clarification.
