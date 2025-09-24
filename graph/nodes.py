@@ -20,7 +20,9 @@ if str(project_root) not in sys.path:
 
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 
+# Import state types first (always needed)
 from .state import AgentState, Route, TodoItem, TodoType
+
 # Conditional imports to support both relative and absolute imports
 try:
     from backend.message_types import Message, Role, RouteDecision, ToolCall
@@ -30,6 +32,7 @@ try:
     from backend.tool_prompt_builder import build_tool_prompts, load_system_prompt
     from backend.config import config
     from backend.logger import ConversationLogger
+    from backend.ask_user_policy import needs_user_clarification
 except ImportError:
     # Fallback to relative imports if absolute imports fail
     from message_types import Message, Role, RouteDecision, ToolCall
@@ -158,7 +161,7 @@ def model_call_node(state: AgentState) -> Dict[str, Any]:
         )
         state["messages"].append(assistant_message)
 
-    elif _needs_user_clarification(response.content):
+    elif needs_user_clarification(response.content):
         # Needs user clarification
         state["awaiting_user"] = True
         state["user_input_buffer"] = None
@@ -915,23 +918,3 @@ def aggregate_answer_node(state: AgentState) -> Dict[str, Any]:
     return state
 
 
-def _needs_user_clarification(content: str) -> bool:
-    """
-    Determine if the response content indicates a need for user clarification.
-
-    This is a simplified version - in practice, you might use more sophisticated
-    detection based on the model's output patterns.
-    """
-    clarification_indicators = [
-        "请告诉我",
-        "您能提供",
-        "需要更多信息",
-        "请问",
-        "我想了解",
-        "能否告诉我",
-        "需要澄清",
-        "请补充"
-    ]
-
-    content_lower = content.lower()
-    return any(indicator in content_lower for indicator in clarification_indicators)

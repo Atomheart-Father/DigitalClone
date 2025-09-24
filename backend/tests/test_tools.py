@@ -11,8 +11,8 @@ import os
 backend_dir = os.path.join(os.path.dirname(__file__), '..')
 sys.path.insert(0, backend_dir)
 
-from ..tool_registry import ToolRegistry
-from ..message_types import ToolExecutionResult
+from tool_registry import ToolRegistry
+from message_types import ToolExecutionResult
 
 
 def test_tool_registry_loading():
