@@ -357,10 +357,13 @@ def classify_intent_node(state: AgentState) -> Dict[str, Any]:
     if any(keyword in user_input for keyword in ['自动扩充', '整理对话', '总结对话', 'auto_rag']):
         route = Route.AUTO_RAG
         reason = "用户明确请求自动知识扩充"
-    # Check for planning keywords
+    # Check for planning keywords (must match AgentRouter.COMPLEX_KEYWORDS)
     elif any(keyword in user_input for keyword in [
-        '计划', '规划', '制定', '多步骤', '调研', '方案', '评估',
-        '对比', '流程', '依赖', '阶段', '项目', '任务分解'
+        '计划', '规划', '制定', '分解', '多步骤', '调研', '写方案', '评估', '对比',
+        '流程', '依赖', '里程碑', 'roadmap', 'strategy', 'systematic',
+        'complex', 'comprehensive', 'detailed', 'step-by-step', 'breakdown',
+        '分析', '总结', '报告', '查找', '搜索', '研究', '调查', '整理',
+        '综合', '整合', '比较', '评估', '撰写', '生成', '创建'
     ]) or len(user_input) > 100:  # Long inputs likely need planning
         route = Route.PLANNER
         reason = "检测到复杂规划任务特征"
@@ -456,12 +459,29 @@ def planner_generate_node(state: AgentState) -> Dict[str, Any]:
 - rag_upsert: 文档入库
 """
 
-    # Construct user prompt
+    # Construct user prompt with explicit JSON structure
     user_prompt = f"""用户任务：{user_request}
 
 请基于可用工具制定详细的执行计划。{tools_text}
 
-请以JSON格式响应，只输出JSON，不要任何其他解释。"""
+你必须严格按照以下JSON格式响应，只输出JSON，不要任何其他解释：
+
+{{
+  "goal": "用户任务的清晰目标描述",
+  "success_criteria": "如何判断任务成功完成的明确标准",
+  "todos": [
+    {{
+      "id": "T1",
+      "title": "具体可执行的步骤标题",
+      "why": "这一步的必要性和作用",
+      "type": "tool|chat|reason|write|research",
+      "tool": "calculator|datetime|rag_search|rag_upsert|web_search|web_read|file_read|tabular_qa|python_exec|markdown_writer",
+      "input": {{"参数名": "参数值"}},
+      "expected_output": "期望产出的格式描述",
+      "needs": ["需要用户提供的具体信息"]
+    }}
+  ]
+}}"""
 
     try:
         # Use JSON mode for strict structured output
