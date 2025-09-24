@@ -376,8 +376,15 @@ class CLIApp:
             self.conversation_history.append(assistant_message)
 
             # Log the conversation (simplified)
+            # Create a dummy route decision for logging
+            from agent_core import RouteDecision
+            dummy_route_decision = RouteDecision(
+                engine="chat",  # Default to chat for streaming mode
+                reason="Streaming mode - route decision not available",
+                confidence=1.0
+            )
             self.logger.log_turn(
-                route_decision=None,  # We don't have route decision in streaming mode
+                route_decision=dummy_route_decision,
                 messages=self.conversation_history[-2:],  # Just the last turn
                 tool_calls_count=tool_calls_count,
                 ask_cycles_used=0

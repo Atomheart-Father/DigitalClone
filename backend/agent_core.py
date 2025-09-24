@@ -18,6 +18,7 @@ try:
     )
     from .llm_interface import create_llm_client
     from .tool_registry import registry
+    from .tool_prompt_builder import load_system_prompt
 except ImportError:
     from config import config
     from message_types import (
@@ -26,6 +27,7 @@ except ImportError:
     )
     from llm_interface import create_llm_client
     from tool_registry import registry
+    from tool_prompt_builder import load_system_prompt
 
 logger = logging.getLogger(__name__)
 
@@ -235,16 +237,17 @@ class AgentCore:
         user_message = Message(role=Role.USER, content=user_input)
         messages.append(user_message)
 
-        # Get available functions
+        # Get available functions and system prompt
         functions = registry.get_functions_schema()
+        system_prompt = load_system_prompt(route_decision.engine)
 
         # Execute ReAct loop
         if stream:
             # Return streaming generator
-            return self._react_loop_streaming(llm_client, messages, functions, context, route_decision)
+            return self._react_loop_streaming(llm_client, messages, functions, context, route_decision, system_prompt)
         else:
             # Return regular response
-            result = self._react_loop(llm_client, messages, functions, context, stream)
+            result = self._react_loop(llm_client, messages, functions, context, stream, system_prompt)
             return {
                 "response": result["response"],
                 "route_decision": route_decision,
@@ -259,7 +262,8 @@ class AgentCore:
         messages: List[Message],
         functions: List[Dict[str, Any]],
         context: ConversationContext,
-        stream: bool = False
+        stream: bool = False,
+        system_prompt: str = ""
     ) -> Dict[str, Any]:
         """
         Execute the ReAct loop with tool calling and AskUser handling.
@@ -274,7 +278,7 @@ class AgentCore:
 
             # Generate response from LLM
             try:
-                response = llm_client.generate(messages, functions=functions)
+                response = llm_client.generate(messages, functions=functions, system_prompt=system_prompt)
             except Exception as e:
                 logger.error(f"LLM generation failed: {e}")
                 return {
@@ -409,7 +413,8 @@ class AgentCore:
         messages: List[Message],
         functions: List[Dict[str, Any]],
         context: ConversationContext,
-        route_decision: RouteDecision
+        route_decision: RouteDecision,
+        system_prompt: str
     ) -> Generator[StreamingChunk, None, None]:
         """
         Execute the ReAct loop with streaming response.
@@ -418,7 +423,7 @@ class AgentCore:
         """
         try:
             # Generate streaming response
-            response_generator = llm_client.generate(messages, functions=functions, stream=True)
+            response_generator = llm_client.generate(messages, functions=functions, stream=True, system_prompt=system_prompt)
 
             # Yield chunks as they come
             for chunk in response_generator:
