@@ -21,6 +21,7 @@ class Role(str, Enum):
 
 class ToolCall(BaseModel):
     """Represents a tool function call."""
+    id: Optional[str] = Field(None, description="Unique identifier for the tool call")
     name: str = Field(..., description="Name of the tool to call")
     arguments: Dict[str, Any] = Field(default_factory=dict, description="Arguments for the tool call")
 

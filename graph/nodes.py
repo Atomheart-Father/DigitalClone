@@ -697,7 +697,7 @@ def call_tool_with_llm(executor: str, tool_name: str, task_context: str, state: 
                 elif tool_call.name == tool_name:
                     # Execute the tool
                     try:
-                        result = registry.execute(tool_name, tool_call.arguments)
+                        result = registry.execute(tool_name, **tool_call.arguments)
                         state["tool_call_count"] += 1
 
                         # Add tool call to conversation
@@ -847,7 +847,13 @@ def todo_dispatch_node(state: AgentState) -> Dict[str, Any]:
         # Check if this todo needs sub-planning
         if todo.type in [TodoType.REASON, TodoType.RESEARCH] and state["depth_budget"] > 0:
             complexity_indicators = ['分解', '细化', '子任务', '多步骤', '分阶段']
-            if any(indicator in todo.title.lower() or indicator in (todo.expected_output or "").lower()):
+            title_lower = todo.title.lower()
+            output_lower = (todo.expected_output or "").lower()
+            needs_subplanning = any(
+                indicator in title_lower or indicator in output_lower
+                for indicator in complexity_indicators
+            )
+            if needs_subplanning:
                 logger.info(f"Todo {todo.id} may benefit from sub-planning (depth_budget: {state['depth_budget']})")
                 # Could trigger planner_refine_local here
 
