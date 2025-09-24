@@ -32,7 +32,10 @@ from .nodes import (
     planner_generate_node,
     planner_gate_node,
     todo_dispatch_node,
-    aggregate_answer_node
+    aggregate_answer_node,
+    # Reflective replanning nodes
+    reflective_replanning_check_node,
+    reflective_replanning_node
 )
 from .edges import (
     route_after_decision,
@@ -132,11 +135,16 @@ def build_planner_graph() -> StateGraph:
     graph.add_node("planner_gate", planner_gate_node)
     graph.add_node("todo_dispatch", todo_dispatch_node)
     graph.add_node("tool_exec", tool_exec_node)
+    graph.add_node("reflective_check", reflective_replanning_check_node)
+    graph.add_node("reflective_replanning", reflective_replanning_node)
     graph.add_node("ask_user_interrupt", ask_user_interrupt_node)
     graph.add_node("aggregate_answer", aggregate_answer_node)
 
     # Add edges for planner pipeline
-    graph.add_edge("classify_intent", "sufficiency_check")
+    graph.add_conditional_edges(
+        "classify_intent",
+        lambda state: "ask_user_interrupt" if state.get("_route_to_ask_user") else "sufficiency_check"
+    )
     graph.add_edge("sufficiency_check", "planner_generate")
     graph.add_edge("planner_generate", "planner_gate")
 
@@ -146,11 +154,20 @@ def build_planner_graph() -> StateGraph:
         lambda state: "ask_user_interrupt" if state["sufficiency"] == "missing" else "todo_dispatch"
     )
 
-    # After tool execution or user clarification
+    # After tool execution - check for reflective replanning
     graph.add_conditional_edges(
         "tool_exec",
-        lambda state: "ask_user_interrupt" if state.get("awaiting_user") else "todo_dispatch"
+        lambda state: "ask_user_interrupt" if state.get("awaiting_user") else "reflective_check"
     )
+
+    # After reflective check - decide if replanning is needed
+    graph.add_conditional_edges(
+        "reflective_check",
+        lambda state: "reflective_replanning" if state.get("trigger_reflective_replanning") else "todo_dispatch"
+    )
+
+    # After reflective replanning - continue with dispatch
+    graph.add_edge("reflective_replanning", "todo_dispatch")
 
     # After user clarification - check if we need to resume a tool call
     graph.add_conditional_edges(
@@ -164,7 +181,7 @@ def build_planner_graph() -> StateGraph:
         lambda state: "tool_exec" if state.get("pending_tool_call") else "aggregate_answer"
     )
 
-    # Set entry point
+    # Set entry point - we'll handle conditional logic in the first node
     graph.set_entry_point("classify_intent")
 
     return graph

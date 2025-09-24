@@ -8,6 +8,7 @@ import os
 import logging
 from typing import Dict, Any, List
 from pathlib import Path
+from datetime import datetime
 import chardet
 
 logger = logging.getLogger(__name__)
@@ -227,10 +228,46 @@ def run(file_path: str, max_length: int = 8000, encoding: str = "auto") -> Dict[
             "file_info": file_info,
             "content": content,
             "encoding_used": encoding if encoding != "auto" else _detect_encoding(resolved_path),
-            "truncated": len(content) > max_length
+            "truncated": len(content) > max_length,
+            "add_to_context": True  # Signal to add content to chat context
         }
 
         logger.info(f"File read completed: {len(content)} characters from {extension} file")
+
+        # Auto-upsert to RAG system for future queries
+        try:
+            # Import here to avoid circular imports
+            from .tool_rag_upsert import run as rag_upsert_run
+
+            # Create document for RAG with timestamp in title
+            base_title = resolved_path.stem  # filename without extension
+            timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+            doc_title = f"{base_title}_{timestamp}"
+            rag_document = f"# {doc_title}\n\n{content}"
+
+            rag_result = rag_upsert_run(
+                doc_id=doc_title,
+                text=rag_document,
+                source="file_read",
+                meta={
+                    "file_path": str(resolved_path),
+                    "file_size": file_info["size"],
+                    "file_modified": file_info["modified"],
+                    "timestamp": timestamp
+                }
+            )
+
+            if rag_result["ok"]:
+                logger.info(f"✅ Auto-upserted file content to RAG system")
+                result["rag_upserted"] = True
+            else:
+                logger.warning(f"⚠️ Failed to upsert to RAG: {rag_result.get('error', 'Unknown error')}")
+                result["rag_upserted"] = False
+
+        except Exception as e:
+            logger.warning(f"⚠️ RAG upsert failed: {e}")
+            result["rag_upserted"] = False
+
         return {"ok": True, "value": result}
 
     except ValueError as e:

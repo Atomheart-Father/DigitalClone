@@ -169,13 +169,11 @@ class TestMarkdownWriterTool:
     def test_markdown_writer_basic(self):
         """Test basic markdown writing."""
         result = registry.execute('markdown_writer',
-                                title='Test Document',
                                 content='# Hello\n\nThis is a test.',
                                 filename='test_doc.md')
         assert result.ok == True
         # Filename processing may modify the final name
         assert 'test_doc' in result.value['file_info']['file_path']
-        assert result.value['title'] == 'Test Document'
         assert result.value['content_length'] > 0
 
         # Check if file was created
@@ -185,26 +183,23 @@ class TestMarkdownWriterTool:
         # Clean up
         file_path.unlink()
 
-    def test_markdown_writer_append(self):
-        """Test appending to existing file."""
+    def test_markdown_writer_multiple_files(self):
+        """Test writing multiple files."""
         # First write
         result1 = registry.execute('markdown_writer',
-                                 title='Test Document',
-                                 content='First part.',
-                                 filename='append_test.md')
+                                 content='First file content.',
+                                 filename='test1.md')
         assert result1.ok == True
 
-        # Append
+        # Second write (different file)
         result2 = registry.execute('markdown_writer',
-                                 title='Test Document',
-                                 content='Second part.',
-                                 filename='append_test.md',
-                                 append=True)
+                                 content='Second file content.',
+                                 filename='test2.md')
         assert result2.ok == True
 
         # Clean up
-        file_path = Path(result2.value['file_info']['file_path'])
-        file_path.unlink()
+        Path(result1.value['file_info']['file_path']).unlink()
+        Path(result2.value['file_info']['file_path']).unlink()
 
     def test_markdown_writer_parameter_validation(self):
         """Test parameter validation for markdown_writer."""
@@ -215,7 +210,7 @@ class TestMarkdownWriterTool:
 
         result = registry.execute('markdown_writer', content='test content')
         assert result.ok == False
-        assert "参数验证失败" in result.error and "title" in result.error
+        assert "参数验证失败" in result.error and "filename" in result.error
 
 
 class TestToolIntegration:
