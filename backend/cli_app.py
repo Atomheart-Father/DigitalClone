@@ -17,8 +17,8 @@ import logger
 
 # Import graph modules with proper error handling
 try:
-from graph import graph_app, planner_app
-from graph.state import create_initial_state
+    from graph import graph_app, planner_app
+    from graph.state import create_initial_state
     from tool_prompt_builder import load_system_prompt
     GRAPH_AVAILABLE = True
 except ImportError as e:
