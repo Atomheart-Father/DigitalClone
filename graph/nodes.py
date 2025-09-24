@@ -592,25 +592,25 @@ def planner_generate_node(state: AgentState) -> Dict[str, Any]:
         try:
             final_response = chat_client.generate(
                 messages=[Message(role=Role.USER, content=json_prompt)],
-            stream=False,
+                stream=False,
                 response_format={"type": "json_object"}  # Only place using JSON mode
-        )
+            )
 
             content = final_response.content.strip()
             logger.info(f"📋 PHASE 3 RESPONSE ({len(content)} chars)")
 
-        try:
-            plan_data = json.loads(content)
+            try:
+                plan_data = json.loads(content)
                 logger.info("📋 PHASE 3 COMPLETE - JSON plan parsed successfully")
-        except json.JSONDecodeError as e:
+            except json.JSONDecodeError as e:
                 logger.error(f"❌ JSON parsing failed: {e}")
                 # Try to extract JSON
-            import re
-            json_match = re.search(r'\{.*\}', content, re.DOTALL)
-            if json_match:
+                import re
+                json_match = re.search(r'\{.*\}', content, re.DOTALL)
+                if json_match:
                     plan_data = json.loads(json_match.group())
                     logger.info("📋 Extracted JSON from response")
-            else:
+                else:
                     raise ValueError(f"Failed to parse JSON: {content[:200]}...")
 
         except Exception as e:
@@ -639,7 +639,7 @@ def planner_generate_node(state: AgentState) -> Dict[str, Any]:
 
             # 重要：即使需要用户输入，也要先生成plan，让ask_user_interrupt完成后能够继续执行
             # 转换JSON计划为TodoItem对象（但暂时不设置到state["plan"]，等用户输入后再设置）
-        todos = []
+            todos = []
             for todo_data in plan_data.get("todos", []):
                 # 验证工具是否在白名单中
                 tool_name = todo_data.get("tool")
@@ -710,9 +710,13 @@ def planner_generate_node(state: AgentState) -> Dict[str, Any]:
                 needs=[]  # Phase 3中needs应为空，由ask_user处理
             ))
 
-        # 设置最终计划
-                state["plan"] = todos
-        state["execution_strategy"] = plan_data.get("strategy", "serial")
+            # 临时存储plan，等待用户输入完成后设置
+            state["_pending_plan"] = todos
+            state["execution_strategy"] = plan_data.get("strategy", "serial")
+
+        return state
+
+        # 正常处理：转换JSON计划为TodoItem对象
 
         logger.info(f"🎯 PLAN COMPLETE - {len(todos)} todos (strategy: {state['execution_strategy']})")
         logger.info(f"📊 Goal: {plan_data.get('goal', 'N/A')}")
@@ -805,14 +809,24 @@ def _extract_key_facts(state: AgentState, draft_plan: str) -> str:
         facts.append("需要信息搜索")
     if "报告" in draft_plan or "输出" in draft_plan:
         facts.append("需要生成输出")
+    if "读取" in draft_plan or "read" in draft_plan.lower():
+        facts.append("需要读取文件内容")
+    if "上网" in draft_plan or "web" in draft_plan.lower():
+        facts.append("需要网络搜索")
 
-    # 从消息历史中提取
-    for msg in state["messages"][-3:]:  # 最近3条消息
+    # 从消息历史中提取更多上下文
+    for msg in state["messages"][-5:]:  # 最近5条消息
         content = str(msg.content or "")
-        if len(content) > 20:
-            facts.append(f"上下文: {content[:30]}...")
+        if len(content) > 10:
+            # 提取更有意义的信息
+            if "路径" in content or "文件" in content:
+                facts.append(f"文件相关: {content[:50]}...")
+            elif "搜索" in content or "查找" in content:
+                facts.append(f"搜索需求: {content[:50]}...")
+            else:
+                facts.append(f"上下文: {content[:40]}...")
 
-    return "; ".join(facts[:3]) if facts else "基本任务执行"
+    return "; ".join(facts[:5]) if facts else "基本任务执行"
 
 
 def _summarize_draft_points(draft_plan: str) -> str:
@@ -820,11 +834,26 @@ def _summarize_draft_points(draft_plan: str) -> str:
     # 提取关键步骤信息
     lines = draft_plan.split('\n')
     points = []
-    for line in lines[:3]:  # 前3行要点
-        if line.strip():
-            points.append(line.strip()[:25])
 
-    return "; ".join(points) if points else draft_plan[:40]
+    # 提取更多行的要点，避免截断
+    for line in lines[:5]:  # 前5行要点
+        line = line.strip()
+        if line and not line.startswith('#') and not line.startswith('//'):
+            # 保留更多字符，避免过度截断
+            if len(line) > 40:
+                points.append(line[:40] + "...")
+            else:
+                points.append(line)
+
+    # 如果没有找到要点，尝试提取关键词
+    if not points:
+        # 寻找步骤相关的关键词
+        step_keywords = ['步骤', '1.', '2.', '3.', '首先', '然后', '最后', '需要', '使用']
+        for line in lines[:3]:
+            if any(keyword in line for keyword in step_keywords):
+                points.append(line.strip()[:50])
+
+    return "; ".join(points) if points else draft_plan[:80]
 
 
 def _build_context_summary(state: AgentState, draft_plan: str, review_feedback: str) -> str:

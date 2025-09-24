@@ -281,12 +281,12 @@ def build_phase2_review_prompt(goal: str, facts: str, draft_points: str) -> str:
     Build Phase-2 micro-review prompt for Reasoner.
 
     Args:
-        goal: Task goal (≤50 chars)
-        facts: Key facts (≤80 chars)
-        draft_points: Draft key points (≤40 chars)
+        goal: Task goal (≤100 chars)
+        facts: Key facts (≤150 chars)
+        draft_points: Draft key points (≤80 chars)
 
     Returns:
-        Complete Phase-2 prompt (≤200 tokens)
+        Complete Phase-2 prompt (≤300 tokens)
     """
     from pathlib import Path
 
@@ -297,15 +297,15 @@ def build_phase2_review_prompt(goal: str, facts: str, draft_points: str) -> str:
         with open(prompt_file, 'r', encoding='utf-8') as f:
             template = f.read()
 
-        # Fill template with strict length limits
-        prompt = template.replace("{goal}", goal[:50])
-        prompt = prompt.replace("{facts}", facts[:80])
-        prompt = prompt.replace("{draft_points}", draft_points[:40])
+        # Fill template with relaxed length limits to avoid truncation
+        prompt = template.replace("{goal}", goal[:100])
+        prompt = prompt.replace("{facts}", facts[:150])
+        prompt = prompt.replace("{draft_points}", draft_points[:80])
 
         return prompt
 
     except FileNotFoundError:
-        return f"目标:{goal[:50]}\n事实:{facts[:80]}\n草案要点:{draft_points[:40]}\n改进准则:只回'保留/微调/重排/加一步/删一步'之一，并给出10~30字理由"
+        return f"目标:{goal[:100]}\n事实:{facts[:150]}\n草案要点:{draft_points[:80]}\n改进准则:只回'保留/微调/重排/加一步/删一步'之一，并给出10~30字理由"
 
 
 def build_phase3_json_plan_prompt(task: str, context_summary: str = "",
