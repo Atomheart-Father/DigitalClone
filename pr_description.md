@@ -24,6 +24,7 @@ The planner execution was blocking indefinitely when calling DeepSeek reasoner A
 - **Added planner-specific timeout handling**: (30s connect, 180s read) for complex reasoning
 - **Enhanced streaming response parsing** with better error handling
 - **Added comprehensive logging** for API call debugging
+- **Optimized streaming log frequency**: Reduced keepalive logs from every occurrence to every 50 occurrences (~98% reduction in log noise)
 
 ### 2. Planner Logic Improvements (`graph/nodes.py`)
 - **Simplified planning prompts** to reduce API rejection risk

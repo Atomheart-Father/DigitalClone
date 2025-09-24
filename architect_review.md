@@ -134,6 +134,7 @@ effective_timeout = (30, 180) if is_planner_scenario else self.timeout
 - [ ] 回滚计划准备就绪
 - [ ] 监控告警配置完成
 - [ ] 用户沟通计划确认
+- [ ] 日志优化验证（心跳日志频率控制）
 
 ---
 
