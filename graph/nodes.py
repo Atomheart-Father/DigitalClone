@@ -194,45 +194,68 @@ def model_call_node(state: AgentState) -> Dict[str, Any]:
 
 def tool_exec_node(state: AgentState) -> Dict[str, Any]:
     """
-    Tool execution node.
+    Tool execution node with executor routing and two-step protocol.
 
-    Executes pending tool calls and adds results back to conversation.
+    Uses the specified executor to call tools with proper LLM interaction.
     """
-    logger.info("Executing tool...")
+    logger.info("Executing tool with executor routing...")
 
     if not state["pending_tool_call"]:
         raise ValueError("No pending tool call in state")
 
-    tool_call = state["pending_tool_call"]
-    tool_name = tool_call["name"]
-    arguments = tool_call["arguments"]
+    tool_call_info = state["pending_tool_call"]
+    tool_name = tool_call_info["tool"]
+    input_data = tool_call_info["input_data"]
+    todo_id = tool_call_info["todo_id"]
+    executor = tool_call_info["executor"]
 
-    logger.info(f"Executing tool: {tool_name} with args: {arguments}")
+    logger.info(f"Executing tool: {tool_name} with executor: {executor}")
 
-    # Execute tool
-    tool_result = registry.execute(tool_name, **arguments)
+    # Find the corresponding todo item
+    current_todo = None
+    if state["plan"]:
+        for todo in state["plan"]:
+            if todo.id == todo_id:
+                current_todo = todo
+                break
 
-    # Create tool message
-    if tool_result.ok:
-        content = f"工具执行成功: {tool_result.value}"
+    if not current_todo:
+        logger.error(f"Could not find todo with id {todo_id}")
+        state["pending_tool_call"] = None
+        return state
+
+    # Execute tool using the two-step protocol
+    task_context = f"{current_todo.title}\n目标：{current_todo.expected_output}"
+    tool_result = call_tool_with_llm(executor, tool_name, task_context, state)
+
+    if tool_result["success"]:
+        # Update todo with result
+        current_todo.output = tool_result["summary"]
+        logger.info(f"Tool {tool_name} executed successfully with {executor} executor")
+
+        # Advance to next todo
+        current_idx = state.get("current_todo", 0)
+        state["current_todo"] = current_idx + 1
+
     else:
-        content = f"工具执行失败: {tool_result.error}"
+        if "needs_clarification" in tool_result:
+            # Trigger ask_user_interrupt
+            state["awaiting_user"] = True
+            state["user_input_buffer"] = tool_result["needs_clarification"]
+            logger.info(f"Tool execution paused for user clarification: {tool_result['needs_clarification']}")
+            # Don't clear pending_tool_call - will retry after clarification
+            return state
+        else:
+            # Mark as failed and continue
+            current_todo.output = f"工具执行失败：{tool_result['error']}"
+            logger.error(f"Tool execution failed: {tool_result['error']}")
 
-    tool_message = Message(
-        role=Role.TOOL,
-        content=content,
-        tool_result=ToolCall(
-            name=tool_name,
-            arguments=arguments
-        )
-    )
+            # Advance to next todo despite failure
+            current_idx = state.get("current_todo", 0)
+            state["current_todo"] = current_idx + 1
 
-    # Add to conversation and clear pending call
-    state["messages"].append(tool_message)
+    # Clear pending tool call
     state["pending_tool_call"] = None
-    state["tool_call_count"] += 1
-
-    logger.info(f"Tool execution completed: {tool_name}")
 
     state["execution_path"].append("tool_exec")
     state["current_node"] = "tool_exec"
@@ -411,7 +434,7 @@ def planner_generate_node(state: AgentState) -> Dict[str, Any]:
     tool_prompts = build_tool_prompts()
     tools_text = f"""
 可用工具：
-{tool_prompts["tools_text"]}
+{tool_prompts["tools_text_reasoner"]}
 
 在制定计划时，请考虑使用以下工具：
 - calculator: 数学计算
@@ -761,32 +784,21 @@ def todo_dispatch_node(state: AgentState) -> Dict[str, Any]:
 
     try:
         if todo.type == TodoType.TOOL:
-            # Tool execution with executor routing
+            # For tool execution, set up the tool call for the tool_exec node
             if not todo.tool:
                 logger.error(f"Tool todo {todo.id} missing tool name")
                 todo.output = f"错误：工具调用缺少工具名称"
+                state["current_todo"] = current_idx + 1
             else:
-                # Resolve executor
-                executor = resolve_executor(todo)
-                logger.info(f"Using executor '{executor}' for tool '{todo.tool}'")
-
-                # Execute tool with LLM
-                task_context = f"{todo.title}\n目标：{todo.expected_output}"
-                tool_result = call_tool_with_llm(executor, todo.tool, task_context, state)
-
-                if tool_result["success"]:
-                    todo.output = tool_result["summary"]
-                    logger.info(f"Tool {todo.tool} executed successfully with {executor} executor")
-                else:
-                    if "needs_clarification" in tool_result:
-                        # Trigger ask_user_interrupt
-                        state["awaiting_user"] = True
-                        state["user_input_buffer"] = tool_result["needs_clarification"]
-                        logger.info(f"Tool execution paused for user clarification: {tool_result['needs_clarification']}")
-                        return state  # Don't advance to next todo
-                    else:
-                        todo.output = f"工具执行失败：{tool_result['error']}"
-                        logger.error(f"Tool execution failed: {tool_result['error']}")
+                # Set up tool call for tool_exec node
+                state["pending_tool_call"] = {
+                    "tool": todo.tool,
+                    "input_data": todo.input_data or {},
+                    "todo_id": todo.id,
+                    "executor": resolve_executor(todo)  # Store executor info
+                }
+                logger.info(f"Prepared tool call for {todo.tool} with executor {resolve_executor(todo)}")
+                # Don't advance current_todo yet - wait for tool_exec completion
 
         elif todo.type == TodoType.CHAT:
             # Use chat model for this todo
