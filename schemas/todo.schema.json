@@ -1,0 +1,63 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "type": "object",
+  "properties": {
+    "goal": {
+      "type": "string",
+      "description": "任务的总体目标描述"
+    },
+    "success_criteria": {
+      "type": "string",
+      "description": "如何判断任务成功的明确标准"
+    },
+    "todos": {
+      "type": "array",
+      "description": "具体的执行步骤列表",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "properties": {
+          "id": {
+            "type": "string",
+            "description": "唯一标识符，如 T1, T2, T3"
+          },
+          "title": {
+            "type": "string",
+            "description": "步骤的具体标题"
+          },
+          "why": {
+            "type": "string",
+            "description": "为什么需要这一步"
+          },
+          "type": {
+            "type": "string",
+            "enum": ["tool", "chat", "reason", "write", "research"],
+            "description": "执行类型：tool(工具调用)、chat(对话)、reason(推理)、write(写作)、research(研究)"
+          },
+          "tool": {
+            "type": "string",
+            "description": "工具名称（当type=tool时必填）"
+          },
+          "input": {
+            "type": "object",
+            "description": "输入参数（传给工具或模型）"
+          },
+          "expected_output": {
+            "type": "string",
+            "description": "期望的输出格式描述"
+          },
+          "needs": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "需要用户提供的缺失信息"
+          }
+        },
+        "required": ["id", "title", "type", "expected_output"]
+      }
+    }
+  },
+  "required": ["goal", "success_criteria", "todos"],
+  "additionalProperties": false
+}
