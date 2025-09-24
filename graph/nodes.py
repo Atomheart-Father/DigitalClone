@@ -110,7 +110,10 @@ def model_call_node(state: AgentState) -> Dict[str, Any]:
     messages = state["messages"]
 
     # Load appropriate system prompt
-    from ..backend.tool_prompt_builder import load_system_prompt
+    try:
+        from backend.tool_prompt_builder import load_system_prompt
+    except ImportError:
+        from tool_prompt_builder import load_system_prompt
     system_prompt = load_system_prompt(route.value)
 
     # Select appropriate LLM client

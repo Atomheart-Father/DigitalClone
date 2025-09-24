@@ -247,8 +247,9 @@ class CLIApp:
 
     def _handle_graph_execution(self, initial_state):
         """Handle regular graph execution."""
-        # Execute the graph
-        final_state = graph_app.invoke(initial_state)
+        # Execute the graph with checkpointer configuration
+        config = {"configurable": {"thread_id": "cli-session"}}
+        final_state = graph_app.invoke(initial_state, config=config)
 
         # Extract the final answer
         if final_state["final_answer"]:
@@ -283,7 +284,8 @@ class CLIApp:
             # In practice, this would be more complex with actual streaming
 
             # For demonstration, just execute normally but simulate streaming
-            final_state = graph_app.invoke(initial_state)
+            config = {"configurable": {"thread_id": "cli-session"}}
+            final_state = graph_app.invoke(initial_state, config=config)
 
             # Simulate streaming by yielding content progressively
             if final_state["messages"] and len(final_state["messages"]) > 1:
