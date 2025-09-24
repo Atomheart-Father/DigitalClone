@@ -7,7 +7,10 @@ the flow between nodes in the execution graph.
 
 from typing import Literal
 
-from .state import AgentState, Route
+import sys
+import os
+sys.path.append(os.path.dirname(__file__))
+from state import AgentState, Route
 
 
 def route_after_decision(state: AgentState) -> Literal["model_call", "end"]:

@@ -90,7 +90,8 @@ class CLIApp:
             print("⚠️  未配置 API 密钥，使用 MockClient")
 
         # Show tool information
-        tools = agent.registry.list_tools()
+        from tool_registry import registry
+        tools = registry.list_tools()
         print(f"🛠️  已加载 {len(tools)} 个工具: {[t.name for t in tools]}")
 
         print("\n输入您的消息，或使用特殊命令:")
