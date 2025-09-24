@@ -818,13 +818,13 @@ def _extract_key_facts(state: AgentState, draft_plan: str) -> str:
     for msg in state["messages"][-5:]:  # 最近5条消息
         content = str(msg.content or "")
         if len(content) > 10:
-            # 提取更有意义的信息
+            # 保留完整信息，不要截断
             if "路径" in content or "文件" in content:
-                facts.append(f"文件相关: {content[:50]}...")
+                facts.append(f"文件相关: {content}")
             elif "搜索" in content or "查找" in content:
-                facts.append(f"搜索需求: {content[:50]}...")
+                facts.append(f"搜索需求: {content}")
             else:
-                facts.append(f"上下文: {content[:40]}...")
+                facts.append(f"上下文: {content}")
 
     return "; ".join(facts[:5]) if facts else "基本任务执行"
 
@@ -835,15 +835,12 @@ def _summarize_draft_points(draft_plan: str) -> str:
     lines = draft_plan.split('\n')
     points = []
 
-    # 提取更多行的要点，避免截断
+    # 提取更多行的要点，保留完整信息
     for line in lines[:5]:  # 前5行要点
         line = line.strip()
         if line and not line.startswith('#') and not line.startswith('//'):
-            # 保留更多字符，避免过度截断
-            if len(line) > 40:
-                points.append(line[:40] + "...")
-            else:
-                points.append(line)
+            # 保留完整行信息，不要截断
+            points.append(line)
 
     # 如果没有找到要点，尝试提取关键词
     if not points:
@@ -851,9 +848,9 @@ def _summarize_draft_points(draft_plan: str) -> str:
         step_keywords = ['步骤', '1.', '2.', '3.', '首先', '然后', '最后', '需要', '使用']
         for line in lines[:3]:
             if any(keyword in line for keyword in step_keywords):
-                points.append(line.strip()[:50])
+                points.append(line.strip())
 
-    return "; ".join(points) if points else draft_plan[:80]
+    return "; ".join(points) if points else draft_plan
 
 
 def _build_context_summary(state: AgentState, draft_plan: str, review_feedback: str) -> str:

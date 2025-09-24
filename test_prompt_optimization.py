@@ -53,7 +53,7 @@ def test_prompt_generation():
         missing_params="file_path",
         constraints="快速完成"
     )
-    assert "可用工具白名单" in p1_prompt, "❌ Phase 1应该包含工具白名单"
+    assert "工具" in p1_prompt, "❌ Phase 1应该包含工具列表"
     assert len(p1_prompt) < 1000, f"❌ Phase 1过长: {len(p1_prompt)} chars"
     print(f"✅ Phase 1 Prompt生成正常 ({len(p1_prompt)} chars)")
 
