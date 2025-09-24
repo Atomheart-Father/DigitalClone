@@ -44,6 +44,7 @@ class LLMClient(ABC):
         functions: Optional[List[Dict[str, Any]]] = None,
         stream: bool = False,
         system_prompt: Optional[str] = None,
+        response_format: Optional[Dict[str, Any]] = None,
         **kwargs
     ) -> Union[LLMResponse, Generator[StreamingChunk, None, None]]:
         """Generate a response from the LLM."""
@@ -179,6 +180,7 @@ class DeepSeekChatClient(LLMClient):
         functions: Optional[List[Dict[str, Any]]] = None,
         stream: bool = False,
         system_prompt: Optional[str] = None,
+        response_format: Optional[Dict[str, Any]] = None,
         **kwargs
     ) -> Union[LLMResponse, Generator[StreamingChunk, None, None]]:
         """Generate response using DeepSeek Chat model."""
@@ -201,6 +203,9 @@ class DeepSeekChatClient(LLMClient):
 
         if functions:
             payload["functions"] = functions
+
+        if response_format:
+            payload["response_format"] = response_format
 
         try:
             logger.debug(f"Sending request to {url} with model {self.model_name}")
@@ -274,6 +279,7 @@ class DeepSeekReasonerClient(LLMClient):
         functions: Optional[List[Dict[str, Any]]] = None,
         stream: bool = False,
         system_prompt: Optional[str] = None,
+        response_format: Optional[Dict[str, Any]] = None,
         **kwargs
     ) -> Union[LLMResponse, Generator[StreamingChunk, None, None]]:
         """Generate response using DeepSeek Reasoner model."""
@@ -296,6 +302,9 @@ class DeepSeekReasonerClient(LLMClient):
 
         if functions:
             payload["functions"] = functions
+
+        if response_format:
+            payload["response_format"] = response_format
 
         try:
             logger.debug(f"Sending request to {url} with model {self.model_name}")
@@ -365,6 +374,7 @@ class MockClient(LLMClient):
         functions: Optional[List[Dict[str, Any]]] = None,
         stream: bool = False,
         system_prompt: Optional[str] = None,
+        response_format: Optional[Dict[str, Any]] = None,
         **kwargs
     ) -> Union[LLMResponse, Generator[StreamingChunk, None, None]]:
         """Generate mock response for development."""
@@ -382,29 +392,59 @@ class MockClient(LLMClient):
         else:
             user_content = last_user_msg.content.lower()
 
-            # Simple mock responses based on content
-            if "算" in user_content or "计算" in user_content:
-                # Mock calculator tool call
-                response_content = "我来帮您计算这个问题。"
-                tool_calls = [ToolCall(
-                    name="calculator",
-                    arguments={"expression": "2 + 3"}  # Mock expression
-                )]
-            elif "时间" in user_content or "日期" in user_content:
-                # Mock datetime tool call
-                response_content = "我来告诉您当前的时间。"
-                tool_calls = [ToolCall(
-                    name="datetime",
-                    arguments={"format": "iso"}
-                )]
-            elif "计划" in user_content or "规划" in user_content:
-                # Mock ask_user for complex planning
-                response_content = "这是一个复杂的规划任务，我需要更多信息来为您制定最佳方案。请告诉我：\n1. 您的目标是什么？\n2. 时间限制是多久？\n3. 您有什么特殊要求吗？"
+            # Handle JSON mode for planner
+            if response_format and response_format.get("type") == "json_object":
+                # Return mock JSON plan in the expected format
+                response_content = '''{
+  "goal": "制定学习计划",
+  "success_criteria": "掌握编程和数学基础，能够独立解决问题",
+  "todos": [
+    {
+      "id": "T1",
+      "title": "学习Python基础语法",
+      "why": "编程学习的基础",
+      "type": "tool",
+      "tool": "calculator",
+      "input": {"expression": "2+3"},
+      "expected_output": "计算结果",
+      "needs": []
+    },
+    {
+      "id": "T2",
+      "title": "练习数学计算",
+      "why": "加强数学能力",
+      "type": "chat",
+      "input": {},
+      "expected_output": "学习建议",
+      "needs": []
+    }
+  ]
+}'''
                 tool_calls = []
             else:
-                # General response
-                response_content = "这是MockClient的回复。在实际使用中，这里会是真实的AI回答。您的问题是：" + last_user_msg.content
-                tool_calls = []
+                # Simple mock responses based on content
+                if "算" in user_content or "计算" in user_content:
+                    # Mock calculator tool call
+                    response_content = "我来帮您计算这个问题。"
+                    tool_calls = [ToolCall(
+                        name="calculator",
+                        arguments={"expression": "2 + 3"}  # Mock expression
+                    )]
+                elif "时间" in user_content or "日期" in user_content:
+                    # Mock datetime tool call
+                    response_content = "我来告诉您当前的时间。"
+                    tool_calls = [ToolCall(
+                        name="datetime",
+                        arguments={"format": "iso"}
+                    )]
+                elif "计划" in user_content or "规划" in user_content:
+                    # Mock ask_user for complex planning
+                    response_content = "这是一个复杂的规划任务，我需要更多信息来为您制定最佳方案。请告诉我：\n1. 您的目标是什么？\n2. 时间限制是多久？\n3. 您有什么特殊要求吗？"
+                    tool_calls = []
+                else:
+                    # General response
+                    response_content = "这是MockClient的回复。在实际使用中，这里会是真实的AI回答。您的问题是：" + last_user_msg.content
+                    tool_calls = []
 
         if stream:
             # Simulate streaming by yielding chunks

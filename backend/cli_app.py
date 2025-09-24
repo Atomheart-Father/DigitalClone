@@ -111,6 +111,7 @@ class CLIApp:
         print("  :graph 显示图状态")
         print("  :route 显示路由决策")
         print("  :prompt [system|tools] 显示系统提示")
+        print("  :plan  显示当前计划")
         print("-" * 50)
 
     def _handle_special_command(self, command: str) -> bool:
@@ -154,6 +155,10 @@ class CLIApp:
 
         elif cmd == 'prompt':
             self._show_prompt_status(command)
+            return False
+
+        elif cmd == 'plan':
+            self._show_plan_status()
             return False
 
         else:
@@ -649,6 +654,27 @@ class CLIApp:
             except Exception as e:
                 print(f"加载工具清单失败: {e}")
 
+        print("=" * 30)
+
+    def _show_plan_status(self):
+        """Show current planner execution status."""
+        print("\n=== Planner 执行状态 ===")
+
+        # Since we don't have direct access to graph state in CLI,
+        # we'll show general planner status
+        print("Planner 模式: 支持复杂多步骤任务规划")
+        print("执行流程: classify_intent → sufficiency_check → planner_generate → todo_dispatch → aggregate_answer")
+        print("\n支持的任务类型:")
+        print("  • tool: 工具调用执行")
+        print("  • chat: 对话模型处理")
+        print("  • reason: 推理模型处理")
+        print("  • write: 写作任务")
+        print("  • research: 研究任务")
+        print("\n限制设置:")
+        print("  • 最大工具调用: 3 次/轮")
+        print("  • 最大问询次数: 2 次")
+        print("  • 最大深度: 1 层子规划")
+        print("\n状态信息: 使用 :graph 查看详细执行状态")
         print("=" * 30)
 
     def _handle_clarification(self, clarification: str):

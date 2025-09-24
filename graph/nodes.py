@@ -5,6 +5,8 @@ This module contains all the node functions that make up the execution graph.
 """
 
 import logging
+import json
+import re
 from typing import Dict, Any, List
 
 import sys
@@ -18,23 +20,25 @@ if str(project_root) not in sys.path:
 
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 
-from .state import AgentState, Route
+from .state import AgentState, Route, TodoItem, TodoType
 # Conditional imports to support both relative and absolute imports
 try:
     from backend.message_types import Message, Role, RouteDecision, ToolCall
     from backend.agent_core import AgentRouter
     from backend.llm_interface import create_llm_client
     from backend.tool_registry import registry
-    from backend.tool_prompt_builder import build_tool_prompts
+    from backend.tool_prompt_builder import build_tool_prompts, load_system_prompt
     from backend.config import config
+    from backend.logger import ConversationLogger
 except ImportError:
     # Fallback to relative imports if absolute imports fail
     from message_types import Message, Role, RouteDecision, ToolCall
     from agent_core import AgentRouter
     from llm_interface import create_llm_client
     from tool_registry import registry
-    from tool_prompt_builder import build_tool_prompts
+    from tool_prompt_builder import build_tool_prompts, load_system_prompt
     from config import config
+    from logger import ConversationLogger
 
 logger = logging.getLogger(__name__)
 
@@ -288,8 +292,16 @@ def classify_intent_node(state: AgentState) -> Dict[str, Any]:
     Classify user intent and choose execution pipeline.
 
     Routes to: chat, planner, auto_rag
+    Locks planner route until completion.
     """
     logger.info("Classifying user intent...")
+
+    # Check if route is already locked (from previous planner execution)
+    if state.get("route_locked", False):
+        logger.info("Route locked, continuing with planner")
+        state["execution_path"].append("classify_intent")
+        state["current_node"] = "classify_intent"
+        return state
 
     if not state["messages"]:
         raise ValueError("No messages in state")
@@ -316,6 +328,8 @@ def classify_intent_node(state: AgentState) -> Dict[str, Any]:
     ]) or len(user_input) > 100:  # Long inputs likely need planning
         route = Route.PLANNER
         reason = "检测到复杂规划任务特征"
+        # Lock the route for planner execution
+        state["route_locked"] = True
     else:
         route = Route.CHAT
         reason = "简单对话任务，使用chat模型"
@@ -348,7 +362,9 @@ def sufficiency_check_node(state: AgentState) -> Dict[str, Any]:
 
 def planner_generate_node(state: AgentState) -> Dict[str, Any]:
     """
-    Generate a structured plan using the reasoner model.
+    Generate a structured plan using the reasoner model with JSON mode.
+
+    Uses response_format=json_object to ensure strict JSON output.
     """
     logger.info("Generating structured plan...")
 
@@ -362,12 +378,15 @@ def planner_generate_node(state: AgentState) -> Dict[str, Any]:
             user_request = msg.content
             break
 
-    # Use reasoner to generate plan
-    llm_client = create_llm_client("reasoner")
+    # Load planner system prompt
+    try:
+        with open(project_root / "prompts" / "reasoner_planner.txt", 'r', encoding='utf-8') as f:
+            system_prompt = f.read()
+    except FileNotFoundError:
+        # Fallback system prompt
+        system_prompt = """你是一个专业的项目规划师。用户会提出一个复杂任务，你需要将其分解为具体的、可执行的步骤。
 
-    system_prompt = """你是一个专业的项目规划师。用户会提出一个复杂任务，你需要将其分解为具体的、可执行的步骤。
-
-请以JSON格式输出计划，格式如下：
+只输出JSON格式的计划，不要其他解释。格式如下：
 {
   "goal": "任务目标描述",
   "success_criteria": "成功标准",
@@ -378,35 +397,87 @@ def planner_generate_node(state: AgentState) -> Dict[str, Any]:
       "why": "为什么需要这一步",
       "type": "tool|chat|reason|write|research",
       "tool": "工具名称（如果type=tool）",
-      "input": "输入数据（可选）",
+      "input": {"参数名": "参数值"},
       "expected_output": "期望的输出格式",
       "needs": ["需要的用户信息"]
     }
   ]
-}
+}"""
 
-只输出JSON，不要其他解释。"""
+    # Create LLM client
+    llm_client = create_llm_client("reasoner")
 
-    prompt = f"用户任务：{user_request}\n\n请制定详细的执行计划。"
+    # Build tool information for planner
+    tool_prompts = build_tool_prompts()
+    tools_text = f"""
+可用工具：
+{tool_prompts["tools_text"]}
+
+在制定计划时，请考虑使用以下工具：
+- calculator: 数学计算
+- datetime: 时间处理
+- rag_search: 知识库搜索
+- rag_upsert: 文档入库
+"""
+
+    # Construct user prompt
+    user_prompt = f"""用户任务：{user_request}
+
+请基于可用工具制定详细的执行计划。{tools_text}
+
+请以JSON格式响应，只输出JSON，不要任何其他解释。"""
 
     try:
+        # Use JSON mode for strict structured output
         response = llm_client.generate(
-            messages=[Message(role=Role.USER, content=prompt)],
+            messages=[Message(role=Role.USER, content=user_prompt)],
             system_prompt=system_prompt,
-            stream=False
+            stream=False,
+            response_format={"type": "json_object"}  # Force JSON output
         )
 
         # Parse the JSON response
-        import json
-        plan_data = json.loads(response.content.strip())
+        content = response.content.strip()
+        logger.debug(f"Raw planner response: {content[:500]}...")
+
+        # Try direct JSON parsing first
+        try:
+            plan_data = json.loads(content)
+        except json.JSONDecodeError:
+            # Try to extract JSON from text using regex
+            json_match = re.search(r'\{.*\}', content, re.DOTALL)
+            if json_match:
+                try:
+                    plan_data = json.loads(json_match.group())
+                    logger.info("Recovered JSON from regex extraction")
+                except json.JSONDecodeError as recovery_error:
+                    logger.error(f"JSON recovery failed: {recovery_error}")
+                    raise ValueError(f"Could not parse JSON response: {content[:200]}...")
+            else:
+                raise ValueError(f"No JSON found in response: {content[:200]}...")
+
+        # Validate JSON against schema (basic validation)
+        required_keys = ["goal", "success_criteria", "todos"]
+        for key in required_keys:
+            if key not in plan_data:
+                raise ValueError(f"Missing required key: {key}")
+
+        if not isinstance(plan_data["todos"], list):
+            raise ValueError("todos must be a list")
 
         # Convert to TodoItem objects
         todos = []
-        for todo_data in plan_data.get("todos", []):
+        for todo_data in plan_data["todos"]:
+            # Validate todo structure
+            required_todo_keys = ["id", "title", "type"]
+            for key in required_todo_keys:
+                if key not in todo_data:
+                    raise ValueError(f"Todo missing required key: {key}")
+
             todos.append(TodoItem(
                 id=todo_data["id"],
                 title=todo_data["title"],
-                why=todo_data["why"],
+                why=todo_data.get("why", ""),
                 type=TodoType(todo_data["type"]),
                 tool=todo_data.get("tool"),
                 input_data=todo_data.get("input"),
@@ -416,10 +487,39 @@ def planner_generate_node(state: AgentState) -> Dict[str, Any]:
 
         state["plan"] = todos
         logger.info(f"Generated plan with {len(todos)} todos")
+        for todo in todos:
+            logger.info(f"  - {todo.id}: {todo.title} ({todo.type.value})")
 
+    except json.JSONDecodeError as e:
+        logger.error(f"JSON parsing failed: {e}")
+        logger.error(f"Raw response: {response.content}")
+        # Try to extract JSON from text using regex
+        json_match = re.search(r'\{.*\}', response.content.strip(), re.DOTALL)
+        if json_match:
+            try:
+                plan_data = json.loads(json_match.group())
+                todos = [TodoItem(
+                    id=todo_data["id"],
+                    title=todo_data["title"],
+                    why=todo_data.get("why", ""),
+                    type=TodoType(todo_data["type"]),
+                    tool=todo_data.get("tool"),
+                    input_data=todo_data.get("input"),
+                    expected_output=todo_data.get("expected_output", ""),
+                    needs=todo_data.get("needs", [])
+                ) for todo_data in plan_data.get("todos", [])]
+                state["plan"] = todos
+                logger.info(f"Recovered plan with {len(todos)} todos from regex")
+            except Exception as recovery_error:
+                logger.error(f"JSON recovery failed: {recovery_error}")
+                state["plan"] = []
+        else:
+            state["plan"] = []
     except Exception as e:
         logger.error(f"Plan generation failed: {e}")
-        # Fallback to empty plan
+        logger.error(f"Response content: {response.content[:500] if response else 'No response'}")
+        import traceback
+        logger.error(f"Traceback: {traceback.format_exc()}")
         state["plan"] = []
 
     state["execution_path"].append("planner_generate")
@@ -455,12 +555,18 @@ def planner_gate_node(state: AgentState) -> Dict[str, Any]:
 def todo_dispatch_node(state: AgentState) -> Dict[str, Any]:
     """
     Dispatch the current todo item for execution.
+
+    Routes to different execution paths based on todo type:
+    - tool: Execute via tool registry with proper tool_calls protocol
+    - chat: Use chat model
+    - reason/write/research: Use reasoner model
     """
     logger.info("Dispatching todo item...")
 
     if not state["plan"]:
         logger.warning("No plan available for dispatch")
         state["should_end"] = True
+        state["current_node"] = "end"
         return state
 
     # Get current todo
@@ -472,44 +578,108 @@ def todo_dispatch_node(state: AgentState) -> Dict[str, Any]:
         return state
 
     todo = state["plan"][current_idx]
-    state["current_todo"] = current_idx
 
     logger.info(f"Dispatching todo {todo.id}: {todo.title} (type: {todo.type.value})")
 
-    # Route based on todo type
-    if todo.type == TodoType.TOOL:
-        # Prepare tool call
-        state["pending_tool_call"] = {
-            "name": todo.tool,
-            "arguments": todo.input_data or {},
-            "todo_id": todo.id
-        }
-    elif todo.type == TodoType.CHAT:
-        # Use chat model
-        llm_client = create_llm_client("chat")
-        response = llm_client.generate(
-            messages=state["messages"],
-            system_prompt=f"执行任务：{todo.title}\n目标：{todo.expected_output}",
-            stream=False
-        )
-        # Add response to messages
-        assistant_msg = Message(role=Role.ASSISTANT, content=response.content)
-        state["messages"].append(assistant_msg)
+    try:
+        if todo.type == TodoType.TOOL:
+            # Execute tool using registry with proper protocol
+            if not todo.tool:
+                logger.error(f"Tool todo {todo.id} missing tool name")
+                # Mark as failed but continue
+                todo.output = f"错误：工具调用缺少工具名称"
+            else:
+                # Build tool prompt for execution context
+                system_prompt = f"""执行工具任务：{todo.title}
+目标：{todo.expected_output}
+请使用指定的工具完成任务。"""
 
-    elif todo.type in [TodoType.REASON, TodoType.WRITE, TodoType.RESEARCH]:
-        # Use reasoner model
-        llm_client = create_llm_client("reasoner")
-        response = llm_client.generate(
-            messages=state["messages"],
-            system_prompt=f"执行任务：{todo.title}\n目标：{todo.expected_output}",
-            stream=False
-        )
-        # Add response to messages
-        assistant_msg = Message(role=Role.ASSISTANT, content=response.content)
-        state["messages"].append(assistant_msg)
+                # Create tool call message
+                tool_call = ToolCall(
+                    id=f"call_{todo.id}_{state['tool_call_count']}",
+                    name=todo.tool,
+                    arguments=todo.input_data or {}
+                )
 
-    # Move to next todo
-    state["current_todo"] = current_idx + 1
+                # Add assistant message with tool call
+                assistant_msg = Message(
+                    role=Role.ASSISTANT,
+                    content="",
+                    tool_calls=[tool_call]
+                )
+                state["messages"].append(assistant_msg)
+
+                # Execute the tool
+                result = registry.execute(todo.tool, todo.input_data or {})
+                state["tool_call_count"] += 1
+
+                # Add tool response message
+                tool_msg = Message(
+                    role=Role.TOOL,
+                    content=str(result.output) if hasattr(result, 'output') else str(result),
+                    tool_call_id=tool_call.id
+                )
+                state["messages"].append(tool_msg)
+
+                # Store result in todo
+                todo.output = str(result.output) if hasattr(result, 'output') else str(result)
+                logger.info(f"Tool {todo.tool} executed successfully for todo {todo.id}")
+
+        elif todo.type == TodoType.CHAT:
+            # Use chat model for this todo
+            system_prompt = load_system_prompt("chat")
+            additional_context = f"\n\n当前执行任务：{todo.title}\n期望输出：{todo.expected_output}"
+
+            llm_client = create_llm_client("chat")
+            response = llm_client.generate(
+                messages=state["messages"],
+                system_prompt=system_prompt + additional_context,
+                stream=False
+            )
+
+            # Add response to messages
+            assistant_msg = Message(role=Role.ASSISTANT, content=response.content)
+            state["messages"].append(assistant_msg)
+
+            # Store result in todo
+            todo.output = response.content
+            logger.info(f"Chat model executed for todo {todo.id}")
+
+        elif todo.type in [TodoType.REASON, TodoType.WRITE, TodoType.RESEARCH]:
+            # Use reasoner model for complex tasks
+            system_prompt = load_system_prompt("reasoner")
+            additional_context = f"\n\n当前执行任务：{todo.title}\n期望输出：{todo.expected_output}"
+
+            llm_client = create_llm_client("reasoner")
+            response = llm_client.generate(
+                messages=state["messages"],
+                system_prompt=system_prompt + additional_context,
+                stream=False
+            )
+
+            # Add response to messages
+            assistant_msg = Message(role=Role.ASSISTANT, content=response.content)
+            state["messages"].append(assistant_msg)
+
+            # Store result in todo
+            todo.output = response.content
+            logger.info(f"Reasoner model executed for todo {todo.id}")
+
+        # Check if this todo needs sub-planning
+        if todo.type in [TodoType.REASON, TodoType.RESEARCH] and state["depth_budget"] > 0:
+            # Check if the todo is still too complex for direct execution
+            complexity_indicators = ['分解', '细化', '子任务', '多步骤', '分阶段']
+            if any(indicator in todo.title.lower() or indicator in (todo.expected_output or "").lower()):
+                logger.info(f"Todo {todo.id} may need sub-planning, but keeping depth_budget for now")
+
+        # Move to next todo
+        state["current_todo"] = current_idx + 1
+
+    except Exception as e:
+        logger.error(f"Error executing todo {todo.id}: {e}")
+        # Mark todo as failed but continue with next one
+        todo.output = f"执行失败：{str(e)}"
+        state["current_todo"] = current_idx + 1
 
     state["execution_path"].append("todo_dispatch")
     state["current_node"] = "todo_dispatch"

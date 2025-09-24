@@ -75,9 +75,10 @@ class AgentState(TypedDict):
     # Routing state
     route: Route
     route_decision: Optional[RouteDecision]
+    route_locked: bool  # Lock route during planner execution
 
     # Planning state
-    plan: List[TodoItem]
+    plan: Optional[List[TodoItem]]  # Structured plan from planner_generate
     current_todo: Optional[int]  # Index of current todo being executed
     depth_budget: int
 
@@ -89,6 +90,7 @@ class AgentState(TypedDict):
     awaiting_user: bool
     user_input_buffer: Optional[str]
     sufficiency: str  # "unknown", "enough", "missing"
+    ask_cycles_used: int
 
     # Control flow
     retries: int
@@ -134,7 +136,8 @@ def create_initial_state(user_input: str, session_id: Optional[str] = None) -> A
         messages=[initial_message],
         route=Route.UNDECIDED,
         route_decision=None,
-        plan=[],
+        route_locked=False,
+        plan=None,
         current_todo=None,
         depth_budget=1,
         pending_tool_call=None,
@@ -142,6 +145,7 @@ def create_initial_state(user_input: str, session_id: Optional[str] = None) -> A
         awaiting_user=False,
         user_input_buffer=None,
         sufficiency="unknown",
+        ask_cycles_used=0,
         retries=0,
         max_retries=3,
         current_node="user_input",
