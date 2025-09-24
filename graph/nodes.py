@@ -239,11 +239,12 @@ def tool_exec_node(state: AgentState) -> Dict[str, Any]:
 
     else:
         if "needs_clarification" in tool_result:
-            # Trigger ask_user_interrupt
+            # Trigger ask_user_interrupt - pause the tool call for later resumption
+            state["paused_tool_call"] = state["pending_tool_call"]  # Save for resumption
+            state["pending_tool_call"] = None  # Clear current pending call
             state["awaiting_user"] = True
             state["user_input_buffer"] = tool_result["needs_clarification"]
             logger.info(f"Tool execution paused for user clarification: {tool_result['needs_clarification']}")
-            # Don't clear pending_tool_call - will retry after clarification
             return state
         else:
             # Mark as failed and continue
@@ -282,12 +283,21 @@ def ask_user_interrupt_node(state: AgentState) -> Dict[str, Any]:
     """
     Human-in-the-loop interrupt node.
 
-    This node will be interrupted and resumed after user input.
+    This node handles resumption after user clarification.
+    If there was a paused tool call, it will resume it.
     """
-    logger.info("Entering AskUser interrupt mode")
+    logger.info("Resuming after user clarification")
 
-    # In LangGraph, this would normally interrupt execution
-    # For our CLI implementation, we'll handle this in the CLI layer
+    # Check if there's a paused tool call to resume
+    if state.get("paused_tool_call"):
+        # Resume the paused tool call
+        state["pending_tool_call"] = state["paused_tool_call"]
+        state["paused_tool_call"] = None
+        logger.info("Resuming paused tool call")
+
+    # Clear clarification state
+    state["awaiting_user"] = False
+    state["user_input_buffer"] = None
 
     state["execution_path"].append("ask_user_interrupt")
     state["current_node"] = "ask_user_interrupt"

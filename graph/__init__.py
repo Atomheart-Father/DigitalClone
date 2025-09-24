@@ -146,8 +146,17 @@ def build_planner_graph() -> StateGraph:
         lambda state: "ask_user_interrupt" if state["sufficiency"] == "missing" else "todo_dispatch"
     )
 
-    graph.add_edge("ask_user_interrupt", "todo_dispatch")  # After user clarification
-    graph.add_edge("tool_exec", "todo_dispatch")  # After tool execution
+    # After tool execution or user clarification
+    graph.add_conditional_edges(
+        "tool_exec",
+        lambda state: "ask_user_interrupt" if state.get("awaiting_user") else "todo_dispatch"
+    )
+
+    # After user clarification - check if we need to resume a tool call
+    graph.add_conditional_edges(
+        "ask_user_interrupt",
+        lambda state: "tool_exec" if state.get("pending_tool_call") else "todo_dispatch"
+    )
 
     # Loop back for next todo
     graph.add_conditional_edges(
