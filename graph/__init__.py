@@ -25,7 +25,14 @@ from .nodes import (
     tool_exec_node,
     need_user_node,
     ask_user_interrupt_node,
-    end_node
+    end_node,
+    # Planner nodes
+    classify_intent_node,
+    sufficiency_check_node,
+    planner_generate_node,
+    planner_gate_node,
+    todo_dispatch_node,
+    aggregate_answer_node
 )
 from .edges import (
     route_after_decision,
@@ -108,6 +115,52 @@ def build_graph() -> StateGraph:
     return graph
 
 
+def build_planner_graph() -> StateGraph:
+    """
+    Build the planner graph for complex task execution.
+
+    Returns:
+        Configured StateGraph for planner pipeline
+    """
+    # Create the graph
+    graph = StateGraph(AgentState)
+
+    # Add planner nodes
+    graph.add_node("classify_intent", classify_intent_node)
+    graph.add_node("sufficiency_check", sufficiency_check_node)
+    graph.add_node("planner_generate", planner_generate_node)
+    graph.add_node("planner_gate", planner_gate_node)
+    graph.add_node("todo_dispatch", todo_dispatch_node)
+    graph.add_node("tool_exec", tool_exec_node)
+    graph.add_node("ask_user_interrupt", ask_user_interrupt_node)
+    graph.add_node("aggregate_answer", aggregate_answer_node)
+
+    # Add edges for planner pipeline
+    graph.add_edge("classify_intent", "sufficiency_check")
+    graph.add_edge("sufficiency_check", "planner_generate")
+    graph.add_edge("planner_generate", "planner_gate")
+
+    # Conditional edges from planner_gate
+    graph.add_conditional_edges(
+        "planner_gate",
+        lambda state: "ask_user_interrupt" if state["sufficiency"] == "missing" else "todo_dispatch"
+    )
+
+    graph.add_edge("ask_user_interrupt", "todo_dispatch")  # After user clarification
+    graph.add_edge("tool_exec", "todo_dispatch")  # After tool execution
+
+    # Loop back for next todo
+    graph.add_conditional_edges(
+        "todo_dispatch",
+        lambda state: "tool_exec" if state.get("pending_tool_call") else "aggregate_answer"
+    )
+
+    # Set entry point
+    graph.set_entry_point("classify_intent")
+
+    return graph
+
+
 def create_executable_graph():
     """
     Create executable graph with checkpointer.
@@ -128,5 +181,26 @@ def create_executable_graph():
     return app
 
 
-# Global graph instance
+def create_planner_graph():
+    """
+    Create executable planner graph with checkpointer.
+
+    Returns:
+        Compiled planner graph with memory checkpointer
+    """
+    graph = build_planner_graph()
+
+    # Add memory checkpointer for persistence
+    checkpointer = MemorySaver()
+
+    # Compile the graph
+    app = graph.compile(checkpointer=checkpointer)
+
+    logger.info("Planner LangGraph compiled successfully with memory checkpointer")
+
+    return app
+
+
+# Global graph instances
 graph_app = create_executable_graph()
+planner_app = create_planner_graph()

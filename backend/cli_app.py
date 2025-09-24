@@ -17,8 +17,8 @@ import logger
 
 # Import graph modules with proper error handling
 try:
-    from graph import graph_app
-    from graph.state import create_initial_state
+from graph import graph_app, planner_app
+from graph.state import create_initial_state
     from tool_prompt_builder import load_system_prompt
     GRAPH_AVAILABLE = True
 except ImportError as e:
@@ -109,6 +109,8 @@ class CLIApp:
         print("  :q     退出程序")
         print("  :clear 清空对话历史")
         print("  :graph 显示图状态")
+        print("  :route 显示路由决策")
+        print("  :prompt [system|tools] 显示系统提示")
         print("-" * 50)
 
     def _handle_special_command(self, command: str) -> bool:
@@ -144,6 +146,14 @@ class CLIApp:
 
         elif cmd == 'graph':
             self._show_graph_status()
+            return False
+
+        elif cmd == 'route':
+            self._show_route_status()
+            return False
+
+        elif cmd == 'prompt':
+            self._show_prompt_status(command)
             return False
 
         else:
@@ -227,14 +237,30 @@ class CLIApp:
             # Create initial state
             initial_state = create_initial_state(user_input)
 
-            # Add system prompt based on route (will be determined by graph)
-            # For now, start with empty system prompt, graph will handle routing
-
-            # Execute graph
+            # Quick route classification for streaming mode
             if self.stream:
-                # For streaming, bypass LangGraph and use direct LLM streaming
-                # This avoids the blocking issue with graph.invoke/stream
-                self._handle_direct_streaming(user_input)
+                # For streaming, determine route first
+                from agent_core import AgentRouter
+                router = AgentRouter()
+                route_decision = router.route(user_input, None)
+
+                if route_decision.engine == "reasoner":
+                    # Check if it's complex planning
+                    user_lower = user_input.lower()
+                    is_planning = any(keyword in user_lower for keyword in [
+                        '计划', '规划', '制定', '多步骤', '调研', '方案', '评估',
+                        '对比', '流程', '依赖', '阶段', '项目', '任务分解'
+                    ]) or len(user_input) > 100
+
+                    if is_planning:
+                        # Use planner for complex tasks
+                        self._handle_planner_execution(user_input, route_decision)
+                    else:
+                        # Use direct streaming for simple reasoner tasks
+                        self._handle_direct_streaming(user_input)
+                else:
+                    # Use direct streaming for chat tasks
+                    self._handle_direct_streaming(user_input)
             else:
                 # Handle regular graph execution
                 self._handle_graph_execution(initial_state)
@@ -336,10 +362,10 @@ class CLIApp:
                 logger.error(f"Fallback execution also failed: {fallback_error}")
 
     def _handle_direct_streaming(self, user_input: str):
-        """Handle streaming using direct LLM calls (bypass LangGraph for streaming)."""
+        """Handle streaming using direct LLM calls with tool call support."""
         try:
-            # Use the original AgentCore logic for streaming
             from agent_core import AgentCore
+            from message_types import Message, Role
 
             agent = AgentCore()
             streaming_response = agent.process_turn(
@@ -348,10 +374,10 @@ class CLIApp:
                 stream=True
             )
 
-            # Process streaming chunks
+            # Process streaming chunks with tool call handling
             accumulated_content = ""
-            route_decision = None
             tool_calls_count = 0
+            pending_tool_calls = []
 
             for chunk in streaming_response:
                 if chunk.content:
@@ -359,33 +385,70 @@ class CLIApp:
                     accumulated_content += chunk.content
 
                 if chunk.tool_calls:
-                    tool_calls_count += len(chunk.tool_calls)
-                    # Note: In a full implementation, we'd handle tool calls here
+                    # Handle tool calls in streaming mode
+                    for tool_call in chunk.tool_calls:
+                        pending_tool_calls.append(tool_call)
+                        tool_calls_count += 1
+
+                        # Execute tool immediately
+                        logger.info(f"Executing streaming tool call: {tool_call.name}")
+                        try:
+                            tool_result = agent.registry.execute(tool_call.name, **tool_call.arguments)
+
+                            # Create tool result message
+                            tool_message = Message(
+                                role=Role.TOOL,
+                                content=f"工具执行结果: {tool_result.value if tool_result.ok else tool_result.error}",
+                                tool_result=tool_call
+                            )
+
+                            # Add to conversation history
+                            self.conversation_history.append(tool_message)
+
+                            # Show tool execution in streaming output
+                            print(f"\n[执行工具: {tool_call.name}]", end="", flush=True)
+
+                            # Continue the conversation with tool result
+                            # This is a simplified approach - in production, you'd want to
+                            # continue the streaming conversation with the tool result
+                            follow_up_response = agent.process_turn(
+                                user_input="",  # Empty input since we're continuing
+                                conversation_history=self.conversation_history,
+                                stream=True
+                            )
+
+                            # Process follow-up chunks
+                            for follow_chunk in follow_up_response:
+                                if follow_chunk.content:
+                                    print(follow_chunk.content, end="", flush=True)
+                                    accumulated_content += follow_chunk.content
+
+                        except Exception as tool_error:
+                            logger.error(f"Tool execution failed: {tool_error}")
+                            print(f"\n[工具执行失败: {tool_call.name}]", end="", flush=True)
 
             # Ensure we end with a newline
             if accumulated_content:
                 print()
 
-            # Create a mock message for conversation history
-            from message_types import Message, Role
-            assistant_message = Message(
-                role=Role.ASSISTANT,
-                content=accumulated_content
-            )
+            # Add user and assistant messages to history
             self.conversation_history.append(Message(role=Role.USER, content=user_input))
-            self.conversation_history.append(assistant_message)
+            if accumulated_content:
+                self.conversation_history.append(Message(
+                    role=Role.ASSISTANT,
+                    content=accumulated_content
+                ))
 
-            # Log the conversation (simplified)
-            # Create a dummy route decision for logging
+            # Log the conversation
             from agent_core import RouteDecision
             dummy_route_decision = RouteDecision(
-                engine="chat",  # Default to chat for streaming mode
-                reason="Streaming mode - route decision not available",
+                engine="chat",
+                reason="Streaming mode with tool calls",
                 confidence=1.0
             )
             self.logger.log_turn(
                 route_decision=dummy_route_decision,
-                messages=self.conversation_history[-2:],  # Just the last turn
+                messages=self.conversation_history[-2:],
                 tool_calls_count=tool_calls_count,
                 ask_cycles_used=0
             )
@@ -396,6 +459,43 @@ class CLIApp:
             # Fallback to non-streaming
             initial_state = create_initial_state(user_input)
             self._handle_graph_execution(initial_state)
+
+    def _handle_planner_execution(self, user_input: str, route_decision):
+        """Handle planner execution using LangGraph planner."""
+        try:
+            # Create initial state for planner
+            initial_state = create_initial_state(user_input)
+
+            # Execute planner graph
+            config = {"configurable": {"thread_id": f"planner-{user_input[:20]}"}}  # Use input prefix for thread ID
+            final_state = planner_app.invoke(initial_state, config=config)
+
+            # Extract the final answer
+            if final_state["final_answer"]:
+                print(final_state["final_answer"])
+            elif final_state["messages"]:
+                # Get the last assistant message
+                last_msg = final_state["messages"][-1]
+                if hasattr(last_msg, 'content') and last_msg.content:
+                    print(last_msg.content)
+
+            # Update conversation history
+            if final_state.get("messages"):
+                self.conversation_history = final_state["messages"]
+
+            # Log the conversation
+            self.logger.log_turn(
+                route_decision=route_decision,
+                messages=final_state.get("messages", []),
+                tool_calls_count=final_state.get("tool_call_count", 0),
+                ask_cycles_used=0  # Planner handles ask cycles internally
+            )
+
+        except Exception as e:
+            print(f"\n规划执行出错: {e}")
+            logger.error(f"Error in planner execution: {e}")
+            # Fallback to direct streaming
+            self._handle_direct_streaming(user_input)
 
     def _handle_regular_response(self, result):
         """Handle regular (non-streaming) response."""
@@ -480,6 +580,57 @@ class CLIApp:
         print(f"等待用户输入: {getattr(self, 'awaiting_user_input', False)}")
         print(f"流式输出: {self.stream}")
         print("执行路径: user_input → decide_route → model_call → [tool_exec|need_user|end]")
+        print("=" * 30)
+
+    def _show_route_status(self):
+        """Show current routing decision."""
+        print("\n=== 路由决策状态 ===")
+        print("支持的路由模式:")
+        print("  • chat: 简单对话和基础工具调用")
+        print("  • reasoner: 复杂推理和数学计算")
+        print("  • planner: 复杂规划和多步骤任务")
+        print("  • auto_rag: 自动知识扩充")
+        print("\n决策依据:")
+        print("  • 关键词检测（计划、方案、多步骤等）")
+        print("  • 文本长度阈值（>100字符倾向规划）")
+        print("  • 结构化模式（数字列表、流程图等）")
+        print("  • 复杂度评估")
+        print("=" * 30)
+
+    def _show_prompt_status(self, command: str):
+        """Show current system prompt and tools."""
+        parts = command.split()
+        show_system = len(parts) <= 1 or 'system' in parts[1:]
+        show_tools = len(parts) <= 1 or 'tools' in parts[1:]
+
+        print("\n=== 系统提示状态 ===")
+
+        if show_system:
+            print("\n📝 系统提示:")
+            try:
+                from tool_prompt_builder import load_system_prompt
+                system_prompt = load_system_prompt("chat")  # Default to chat
+                # Show first 200 chars and indicate if truncated
+                if len(system_prompt) > 200:
+                    print(f"{system_prompt[:200]}...")
+                    print(f"\n(完整提示长度: {len(system_prompt)} 字符)")
+                else:
+                    print(system_prompt)
+            except Exception as e:
+                print(f"加载系统提示失败: {e}")
+
+        if show_tools:
+            print("\n🛠️ 工具清单:")
+            try:
+                from tool_prompt_builder import build_tool_prompts
+                tool_prompts = build_tool_prompts()
+                print(f"已注册工具数量: {len(tool_prompts['tools'])}")
+                for tool in tool_prompts["tool_name_index"]:
+                    desc = tool_prompts["tool_name_index"][tool]["description"]
+                    print(f"  • {tool}: {desc[:50]}{'...' if len(desc) > 50 else ''}")
+            except Exception as e:
+                print(f"加载工具清单失败: {e}")
+
         print("=" * 30)
 
     def _handle_clarification(self, clarification: str):
