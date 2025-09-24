@@ -49,9 +49,12 @@ class TodoItem:
     why: str
     type: TodoType
     tool: Optional[str] = None
+    executor: Optional[str] = None  # "auto", "chat", or "reasoner"
     input_data: Optional[Dict[str, Any]] = None
+    arg_template: Optional[Dict[str, Any]] = None  # Template for complex argument construction
     expected_output: str = ""
     needs: List[str] = None  # Information gaps that need user clarification
+    output: Optional[str] = None  # Execution result
 
     def __post_init__(self):
         if self.needs is None:

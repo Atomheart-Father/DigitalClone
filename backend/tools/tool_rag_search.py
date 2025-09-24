@@ -119,11 +119,16 @@ TOOL_META = {
             "source": {
                 "type": "string",
                 "enum": ["any", "chatlog", "web", "file"],
-                "description": "搜索范围",
+                "description": "搜索范围，any表示搜索所有来源",
                 "default": "any"
             }
         },
         "required": ["query"],
         "additionalProperties": False
-    }
+    },
+    "strict": True,
+    "executor_default": "chat",
+    "complexity": "simple",
+    "arg_hint": "query为搜索关键词；k控制返回结果数量(1-20)；source可限定搜索范围。",
+    "caller_snippet": "用于查找之前存储的相关信息、调研结果或历史对话。优先使用此工具获取客观事实，避免主观记忆。"
 }

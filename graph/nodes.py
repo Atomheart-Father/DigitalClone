@@ -480,7 +480,9 @@ def planner_generate_node(state: AgentState) -> Dict[str, Any]:
                 why=todo_data.get("why", ""),
                 type=TodoType(todo_data["type"]),
                 tool=todo_data.get("tool"),
+                executor=todo_data.get("executor"),
                 input_data=todo_data.get("input"),
+                arg_template=todo_data.get("arg_template"),
                 expected_output=todo_data.get("expected_output", ""),
                 needs=todo_data.get("needs", [])
             ))
@@ -552,14 +554,190 @@ def planner_gate_node(state: AgentState) -> Dict[str, Any]:
     return state
 
 
+def resolve_executor(todo: TodoItem) -> str:
+    """
+    Resolve which executor to use for a todo item.
+
+    Returns:
+        "chat" or "reasoner"
+    """
+    # Priority: todo.executor > TOOL_META.executor_default > "chat"
+    if todo.executor and todo.executor != "auto":
+        return todo.executor
+
+    # Check tool metadata
+    if todo.tool:
+        tool_meta = registry.get_tool_meta(todo.tool)
+        if tool_meta:
+            if tool_meta.executor_default == "reasoner":
+                return "reasoner"
+            if tool_meta.complexity == "complex":
+                return "reasoner"
+
+    # Auto-upgrade conditions for chat → reasoner
+    input_data = todo.input_data or {}
+    input_str = json.dumps(input_data, ensure_ascii=False)
+
+    # Condition 1: Parameter object too large (>512 chars)
+    if len(input_str) > 512:
+        logger.info(f"Auto-upgrade to reasoner: large parameter object ({len(input_str)} chars)")
+        return "reasoner"
+
+    # Condition 2: Previous validation failures (placeholder for future implementation)
+    # This would track validation failures and upgrade after N attempts
+
+    # Condition 3: Complex argument construction needed
+    if todo.arg_template:
+        logger.info(f"Auto-upgrade to reasoner: argument template required")
+        return "reasoner"
+
+    # Condition 4: Complex tool types (placeholder for specific tool types)
+
+    # Default to chat
+    return "chat"
+
+
+def call_tool_with_llm(executor: str, tool_name: str, task_context: str, state: AgentState) -> Dict[str, Any]:
+    """
+    Call a tool using the specified executor with proper two-step protocol.
+
+    Returns:
+        Dict with result information
+    """
+    tool_meta = registry.get_tool_meta(tool_name)
+    if not tool_meta:
+        return {"success": False, "error": f"Tool {tool_name} not found"}
+
+    # Get appropriate system prompt
+    system_prompt = load_system_prompt("chat" if executor == "chat" else "reasoner", executor)
+
+    # Create execution context message
+    context_message = f"""任务：{task_context}
+
+请调用 {tool_name} 工具来完成这个任务。
+工具描述：{tool_meta.description}
+参数提示：{tool_meta.arg_hint}
+
+只允许调用 {tool_name} 工具和 ask_user 工具（如果需要澄清信息）。
+"""
+
+    # Add context to messages
+    execution_messages = state["messages"].copy()
+    execution_messages.append(Message(role=Role.USER, content=context_message))
+
+    # Create LLM client
+    llm_client = create_llm_client(executor)
+
+    retry_count = 0
+    max_retries = 2
+
+    while retry_count <= max_retries:
+        try:
+            # Step 1: Generate tool call
+            response = llm_client.generate(
+                messages=execution_messages,
+                functions=[{
+                    "name": tool_name,
+                    "description": tool_meta.description,
+                    "parameters": tool_meta.parameters
+                }, {
+                    "name": "ask_user",
+                    "description": "向用户询问缺失的信息",
+                    "parameters": {
+                        "type": "object",
+                        "properties": {
+                            "question": {"type": "string", "description": "要问用户的问题"}
+                        },
+                        "required": ["question"]
+                    }
+                }],
+                stream=False
+            )
+
+            # Check if we got tool calls
+            if not response.tool_calls:
+                retry_count += 1
+                if retry_count <= max_retries:
+                    logger.warning(f"No tool calls generated, retrying ({retry_count}/{max_retries})")
+                    continue
+                else:
+                    return {"success": False, "error": "No tool calls generated after retries"}
+
+            # Process tool calls
+            for tool_call in response.tool_calls:
+                if tool_call.name == "ask_user":
+                    # Need user clarification - this would trigger ask_user_interrupt
+                    question = tool_call.arguments.get("question", "需要更多信息")
+                    logger.info(f"Tool execution needs clarification: {question}")
+                    return {"success": False, "needs_clarification": question}
+
+                elif tool_call.name == tool_name:
+                    # Execute the tool
+                    try:
+                        result = registry.execute(tool_name, tool_call.arguments)
+                        state["tool_call_count"] += 1
+
+                        # Add tool call to conversation
+                        assistant_msg = Message(
+                            role=Role.ASSISTANT,
+                            content="",
+                            tool_calls=[ToolCall(
+                                id=tool_call.id or f"call_{state['tool_call_count']}",
+                                name=tool_call.name,
+                                arguments=tool_call.arguments
+                            )]
+                        )
+                        state["messages"].append(assistant_msg)
+
+                        # Add tool response
+                        tool_msg = Message(
+                            role=Role.TOOL,
+                            content=str(result.value) if hasattr(result, 'value') and result.value else str(result.error or "Tool executed"),
+                            tool_call_id=tool_call.id or f"call_{state['tool_call_count']}"
+                        )
+                        state["messages"].append(tool_msg)
+
+                        # Step 2: Generate summary
+                        summary_messages = state["messages"].copy()
+                        summary_messages.append(Message(
+                            role=Role.USER,
+                            content="请基于工具执行结果，给出1-2句简洁的总结。"
+                        ))
+
+                        summary_response = llm_client.generate(
+                            messages=summary_messages,
+                            stream=False
+                        )
+
+                        return {
+                            "success": True,
+                            "result": result,
+                            "summary": summary_response.content,
+                            "executor": executor
+                        }
+
+                    except Exception as e:
+                        logger.error(f"Tool execution failed: {e}")
+                        return {"success": False, "error": str(e)}
+
+            # If we get here, no valid tool calls
+            return {"success": False, "error": "No valid tool calls found"}
+
+        except Exception as e:
+            retry_count += 1
+            if retry_count <= max_retries:
+                logger.warning(f"Tool call failed, retrying ({retry_count}/{max_retries}): {e}")
+            else:
+                return {"success": False, "error": f"Tool call failed after retries: {e}"}
+
+    return {"success": False, "error": "Unexpected error in tool execution"}
+
+
 def todo_dispatch_node(state: AgentState) -> Dict[str, Any]:
     """
-    Dispatch the current todo item for execution.
+    Dispatch the current todo item for execution with executor routing.
 
-    Routes to different execution paths based on todo type:
-    - tool: Execute via tool registry with proper tool_calls protocol
-    - chat: Use chat model
-    - reason/write/research: Use reasoner model
+    Implements sophisticated executor selection and two-step tool calling protocol.
     """
     logger.info("Dispatching todo item...")
 
@@ -583,51 +761,36 @@ def todo_dispatch_node(state: AgentState) -> Dict[str, Any]:
 
     try:
         if todo.type == TodoType.TOOL:
-            # Execute tool using registry with proper protocol
+            # Tool execution with executor routing
             if not todo.tool:
                 logger.error(f"Tool todo {todo.id} missing tool name")
-                # Mark as failed but continue
                 todo.output = f"错误：工具调用缺少工具名称"
             else:
-                # Build tool prompt for execution context
-                system_prompt = f"""执行工具任务：{todo.title}
-目标：{todo.expected_output}
-请使用指定的工具完成任务。"""
+                # Resolve executor
+                executor = resolve_executor(todo)
+                logger.info(f"Using executor '{executor}' for tool '{todo.tool}'")
 
-                # Create tool call message
-                tool_call = ToolCall(
-                    id=f"call_{todo.id}_{state['tool_call_count']}",
-                    name=todo.tool,
-                    arguments=todo.input_data or {}
-                )
+                # Execute tool with LLM
+                task_context = f"{todo.title}\n目标：{todo.expected_output}"
+                tool_result = call_tool_with_llm(executor, todo.tool, task_context, state)
 
-                # Add assistant message with tool call
-                assistant_msg = Message(
-                    role=Role.ASSISTANT,
-                    content="",
-                    tool_calls=[tool_call]
-                )
-                state["messages"].append(assistant_msg)
-
-                # Execute the tool
-                result = registry.execute(todo.tool, todo.input_data or {})
-                state["tool_call_count"] += 1
-
-                # Add tool response message
-                tool_msg = Message(
-                    role=Role.TOOL,
-                    content=str(result.output) if hasattr(result, 'output') else str(result),
-                    tool_call_id=tool_call.id
-                )
-                state["messages"].append(tool_msg)
-
-                # Store result in todo
-                todo.output = str(result.output) if hasattr(result, 'output') else str(result)
-                logger.info(f"Tool {todo.tool} executed successfully for todo {todo.id}")
+                if tool_result["success"]:
+                    todo.output = tool_result["summary"]
+                    logger.info(f"Tool {todo.tool} executed successfully with {executor} executor")
+                else:
+                    if "needs_clarification" in tool_result:
+                        # Trigger ask_user_interrupt
+                        state["awaiting_user"] = True
+                        state["user_input_buffer"] = tool_result["needs_clarification"]
+                        logger.info(f"Tool execution paused for user clarification: {tool_result['needs_clarification']}")
+                        return state  # Don't advance to next todo
+                    else:
+                        todo.output = f"工具执行失败：{tool_result['error']}"
+                        logger.error(f"Tool execution failed: {tool_result['error']}")
 
         elif todo.type == TodoType.CHAT:
             # Use chat model for this todo
-            system_prompt = load_system_prompt("chat")
+            system_prompt = load_system_prompt("chat", "chat")
             additional_context = f"\n\n当前执行任务：{todo.title}\n期望输出：{todo.expected_output}"
 
             llm_client = create_llm_client("chat")
@@ -647,7 +810,7 @@ def todo_dispatch_node(state: AgentState) -> Dict[str, Any]:
 
         elif todo.type in [TodoType.REASON, TodoType.WRITE, TodoType.RESEARCH]:
             # Use reasoner model for complex tasks
-            system_prompt = load_system_prompt("reasoner")
+            system_prompt = load_system_prompt("reasoner", "reasoner")
             additional_context = f"\n\n当前执行任务：{todo.title}\n期望输出：{todo.expected_output}"
 
             llm_client = create_llm_client("reasoner")
@@ -667,10 +830,10 @@ def todo_dispatch_node(state: AgentState) -> Dict[str, Any]:
 
         # Check if this todo needs sub-planning
         if todo.type in [TodoType.REASON, TodoType.RESEARCH] and state["depth_budget"] > 0:
-            # Check if the todo is still too complex for direct execution
             complexity_indicators = ['分解', '细化', '子任务', '多步骤', '分阶段']
             if any(indicator in todo.title.lower() or indicator in (todo.expected_output or "").lower()):
-                logger.info(f"Todo {todo.id} may need sub-planning, but keeping depth_budget for now")
+                logger.info(f"Todo {todo.id} may benefit from sub-planning (depth_budget: {state['depth_budget']})")
+                # Could trigger planner_refine_local here
 
         # Move to next todo
         state["current_todo"] = current_idx + 1

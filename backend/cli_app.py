@@ -111,7 +111,8 @@ class CLIApp:
         print("  :graph 显示图状态")
         print("  :route 显示路由决策")
         print("  :prompt [system|tools] 显示系统提示")
-        print("  :plan  显示当前计划")
+        print("  :plan  显示计划详情")
+        print("  :todo <id> 显示特定TODO详情")
         print("-" * 50)
 
     def _handle_special_command(self, command: str) -> bool:
@@ -159,6 +160,17 @@ class CLIApp:
 
         elif cmd == 'plan':
             self._show_plan_status()
+            return False
+
+        elif cmd.startswith('todo'):
+            # :todo <id> - show specific todo details
+            parts = cmd.split()
+            if len(parts) == 2:
+                todo_id = parts[1]
+                self._show_todo_details(todo_id)
+            else:
+                print("用法: :todo <id>")
+                print("示例: :todo T1")
             return False
 
         else:
@@ -657,24 +669,49 @@ class CLIApp:
         print("=" * 30)
 
     def _show_plan_status(self):
-        """Show current planner execution status."""
-        print("\n=== Planner 执行状态 ===")
+        """Show current plan details."""
+        print("\n=== 当前计划详情 ===")
 
-        # Since we don't have direct access to graph state in CLI,
-        # we'll show general planner status
-        print("Planner 模式: 支持复杂多步骤任务规划")
-        print("执行流程: classify_intent → sufficiency_check → planner_generate → todo_dispatch → aggregate_answer")
-        print("\n支持的任务类型:")
-        print("  • tool: 工具调用执行")
-        print("  • chat: 对话模型处理")
-        print("  • reason: 推理模型处理")
-        print("  • write: 写作任务")
-        print("  • research: 研究任务")
-        print("\n限制设置:")
-        print("  • 最大工具调用: 3 次/轮")
-        print("  • 最大问询次数: 2 次")
-        print("  • 最大深度: 1 层子规划")
-        print("\n状态信息: 使用 :graph 查看详细执行状态")
+        # This would ideally access the current graph state
+        # For now, show general information
+        print("Planner v1.0: 支持结构化任务规划与执行")
+        print("计划生成: Reasoner模型 + JSON模式")
+        print("执行分发: 智能路由到Chat/Reasoner执行者")
+        print("工具调用: 严格两步协议 (tool_calls → role:tool → 继续)")
+        print("\n计划包含字段:")
+        print("  • id: 唯一标识符")
+        print("  • title: 任务标题")
+        print("  • type: tool/chat/reason/write/research")
+        print("  • executor: auto/chat/reasoner")
+        print("  • tool: 工具名称 (type=tool时)")
+        print("  • input: 输入参数")
+        print("  • expected_output: 期望输出")
+        print("  • needs: 缺失信息需求")
+        print("\n执行者选择优先级:")
+        print("  1. TodoItem.executor (显式指定)")
+        print("  2. TOOL_META.executor_default")
+        print("  3. 复杂度自动判断")
+        print("  4. Chat (默认)")
+        print("=" * 30)
+
+    def _show_todo_details(self, todo_id: str):
+        """Show details for a specific todo item."""
+        print(f"\n=== TODO {todo_id} 详情 ===")
+
+        # This would access the current plan from graph state
+        # For now, show placeholder information
+        print(f"TODO ID: {todo_id}")
+        print("状态: 计划中 (实际运行时会显示执行状态)")
+        print("\n字段说明:")
+        print("  • title: 任务具体描述")
+        print("  • type: 执行类型 (tool/chat/reason/write/research)")
+        print("  • executor: 执行者 (chat/reasoner)")
+        print("  • tool: 工具名称 (type=tool时)")
+        print("  • input: 输入参数")
+        print("  • expected_output: 期望产出格式")
+        print("  • output: 实际执行结果")
+        print("  • needs: 缺失信息需求")
+        print("\n在实际运行中，此命令会显示该TODO的完整状态信息。")
         print("=" * 30)
 
     def _handle_clarification(self, clarification: str):
