@@ -96,6 +96,16 @@ class ToolMeta(BaseModel):
     arg_hint: str = Field("", description="Hints for parameter formatting and requirements")
     caller_snippet: str = Field("", description="Special calling instructions and examples")
 
+    def __hash__(self):
+        """Make ToolMeta hashable based on name."""
+        return hash(self.name)
+
+    def __eq__(self, other):
+        """Equality based on name."""
+        if isinstance(other, ToolMeta):
+            return self.name == other.name
+        return False
+
 
 class ToolExecutionResult(BaseModel):
     """Result of tool execution."""

@@ -15,7 +15,7 @@ logger = logging.getLogger(__name__)
 
 TOOL_META = {
     "name": "markdown_writer",
-    "description": "将分析结果格式化为Markdown文档并保存到data/notes/目录",
+    "description": "将分析结果格式化为Markdown文档并保存到输出目录",
     "parameters": {
         "type": "object",
         "properties": {
@@ -23,60 +23,57 @@ TOOL_META = {
                 "type": "string",
                 "description": "要写入的内容"
             },
-            "title": {
-                "type": "string",
-                "description": "文档标题"
-            },
             "filename": {
                 "type": "string",
-                "description": "文件名(可选，会自动生成)",
-                "default": ""
+                "description": "文件名（会自动生成时间戳和.md扩展名）"
             },
             "tags": {
                 "type": "array",
                 "items": {"type": "string"},
                 "description": "标签列表",
                 "default": []
-            },
-            "append": {
-                "type": "boolean",
-                "description": "是否追加到现有文件",
-                "default": False
             }
         },
-        "required": ["content", "title"],
+        "required": ["content", "filename"],
         "additionalProperties": False
     },
     "strict": True,
     "executor_default": "chat",
     "complexity": "simple",
-    "arg_hint": "content为文档内容；title为标题；filename可选；tags为标签列表；append决定是否追加",
-    "caller_snippet": "用于保存分析结果、调研报告、总结文档等。文件会保存在data/notes/目录中。"
+    "arg_hint": "content为文档内容；filename为文件名；tags为标签列表。文件会自动保存到OUTPUT_DIR目录。",
+    "caller_snippet": "用于保存分析结果、调研报告、总结文档等。文件会保存在环境变量OUTPUT_DIR指定的目录中。"
 }
 
-def _get_notes_directory() -> Path:
-    """Get or create notes directory."""
-    project_root = Path(__file__).resolve().parent.parent.parent
-    notes_dir = project_root / "data" / "notes"
-    notes_dir.mkdir(parents=True, exist_ok=True)
-    return notes_dir
+def _get_output_directory() -> Path:
+    """Get or create output directory from config."""
+    try:
+        from config import Config
+        output_dir = Path(Config.OUTPUT_DIR)
+    except ImportError:
+        # Fallback if config import fails
+        project_root = Path(__file__).resolve().parent.parent.parent
+        output_dir = project_root / "data" / "output"
 
-def _generate_filename(title: str, filename: str = "") -> str:
-    """Generate safe filename."""
-    if filename:
-        # Sanitize filename
-        safe_filename = "".join(c for c in filename if c.isalnum() or c in (' ', '-', '_')).rstrip()
-        if not safe_filename.endswith('.md'):
-            safe_filename += '.md'
-        return safe_filename
+    output_dir.mkdir(parents=True, exist_ok=True)
+    return output_dir
 
-    # Generate from title
-    safe_title = "".join(c for c in title if c.isalnum() or c in (' ', '-', '_')).rstrip()
+def _generate_filename(filename: str) -> str:
+    """Generate safe filename with timestamp."""
+    # Sanitize filename
+    safe_filename = "".join(c for c in filename if c.isalnum() or c in (' ', '-', '_')).rstrip()
+
+    # Add timestamp and extension
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    return f"{safe_title}_{timestamp}.md"
+    if safe_filename:
+        return f"{safe_filename}_{timestamp}.md"
+    else:
+        return f"document_{timestamp}.md"
 
-def _format_header(title: str, tags: List[str]) -> str:
+def _format_header(filename: str, tags: List[str]) -> str:
     """Format markdown header."""
+    # Extract title from filename (remove timestamp and extension)
+    title = filename.replace('.md', '').split('_')[0] if '_' in filename else filename.replace('.md', '')
+
     header_lines = [
         f"# {title}",
         "",
@@ -143,16 +140,14 @@ def _save_file(file_path: Path, content: str, append: bool = False) -> Dict[str,
     except Exception as e:
         raise ValueError(f"文件保存失败: {e}")
 
-def run(content: str, title: str, filename: str = "", tags: List[str] = None, append: bool = False) -> Dict[str, Any]:
+def run(content: str, filename: str, tags: List[str] = None) -> Dict[str, Any]:
     """
     Execute markdown_writer tool.
 
     Args:
         content: Content to write
-        title: Document title
-        filename: Optional filename
+        filename: Base filename (will be made safe and get timestamp)
         tags: List of tags
-        append: Whether to append to existing file
 
     Returns:
         Dictionary with ok/value/error fields
@@ -161,48 +156,38 @@ def run(content: str, title: str, filename: str = "", tags: List[str] = None, ap
         if not content or not content.strip():
             return {"ok": False, "error": "内容不能为空"}
 
-        if not title or not title.strip():
-            return {"ok": False, "error": "标题不能为空"}
+        if not filename or not filename.strip():
+            return {"ok": False, "error": "文件名不能为空"}
 
         content = content.strip()
-        title = title.strip()
+        filename = filename.strip()
         tags = tags or []
 
-        # Get notes directory
-        notes_dir = _get_notes_directory()
+        # Get output directory
+        output_dir = _get_output_directory()
 
-        # Generate filename
-        final_filename = _generate_filename(title, filename)
-        file_path = notes_dir / final_filename
+        # Generate safe filename with timestamp
+        final_filename = _generate_filename(filename)
+        file_path = output_dir / final_filename
 
         logger.info(f"Writing markdown file: {file_path}")
 
-        # Check if file exists for append mode
-        if append and not file_path.exists():
-            append = False  # File doesn't exist, create new
-
-        if append:
-            # Just append content with separator
-            separator = f"\n\n---\n\n## 更新时间: {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n\n"
-            formatted_content = separator + _format_content(content)
-        else:
-            # Create new file with full formatting
-            formatted_content = (
-                _format_header(title, tags) +
-                _format_content(content) +
-                _format_footer({"original_filename": filename, "tags": tags})
-            )
+        # Always create new file (no append mode for simplicity)
+        formatted_content = (
+            _format_header(final_filename, tags) +
+            _format_content(content) +
+            _format_footer({"original_filename": filename, "tags": tags})
+        )
 
         # Save file
-        file_info = _save_file(file_path, formatted_content, append)
+        file_info = _save_file(file_path, formatted_content, append=False)
 
         result = {
-            "title": title,
+            "filename": final_filename,
             "file_info": file_info,
             "content_length": len(content),
             "formatted_length": len(formatted_content),
-            "tags": tags,
-            "append_mode": append
+            "tags": tags
         }
 
         logger.info(f"Markdown file written: {len(formatted_content)} characters to {file_path}")

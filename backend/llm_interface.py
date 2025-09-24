@@ -58,7 +58,7 @@ class LLMClient(ABC):
         the instability issues of complex prompts with Reasoner.
 
         Args:
-            prompt: Micro-prompt (<=200 chars)
+            prompt: Micro-prompt (<=200 tokens)
             connect_timeout: Connection timeout in seconds
             read_timeout: Read timeout in seconds
 

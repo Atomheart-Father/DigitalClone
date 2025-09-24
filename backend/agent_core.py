@@ -372,6 +372,59 @@ class AgentCore:
         lower_content = content.lower()
         return any(indicator in lower_content for indicator in ask_indicators)
 
+    def continue_with_parameter_input(
+        self,
+        parameters: Dict[str, str],
+        previous_messages: List[Message],
+        needs_info: Dict[str, Any]
+    ) -> Dict[str, Any]:
+        """
+        Continue execution after user provides required parameters.
+
+        Args:
+            parameters: Collected parameter values from user
+            previous_messages: Previous conversation messages
+            needs_info: Information about what parameters were needed
+
+        Returns:
+            Dict containing response and metadata
+        """
+        logger.info(f"Continuing with parameter input: {parameters}")
+
+        # Create a message indicating parameter collection
+        param_summary = ", ".join([f"{k}='{v}'" for k, v in parameters.items()])
+        system_message = Message(
+            role=Role.SYSTEM,
+            content=f"用户已提供所需参数: {param_summary}。请继续执行计划。"
+        )
+
+        # Create initial state with user provided input
+        initial_state = {
+            "messages": previous_messages + [system_message],
+            "execution_path": [],
+            "current_node": "start",
+            "plan": [],
+            "depth_budget": 5,
+            "tool_call_count": 0,
+            "metrics": {},
+            "user_provided_input": parameters,
+            "needs_info": needs_info
+        }
+
+        # For now, return a simple success message
+        # The actual planner execution with parameters will be handled
+        # when the user continues the conversation
+        logger.info("Parameter input recorded, execution will continue in next turn")
+
+        return {
+            "response": f"已接收参数输入: {param_summary}。正在继续执行...",
+            "final_messages": previous_messages + [system_message],
+            "tool_calls_made": 0,
+            "ask_cycles_used": 0,
+            "awaiting_user_input": False,
+            "needs_user_input": None
+        }
+
     def continue_with_user_clarification(
         self,
         clarification: str,

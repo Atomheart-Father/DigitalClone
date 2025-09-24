@@ -39,7 +39,7 @@ class Config:
     # Reasoner Micro-Inference Configuration
     REASONER_MICRO_CONNECT_TIMEOUT: int = int(os.getenv("REASONER_MICRO_CONNECT_TIMEOUT", "10"))  # Connect timeout for micro-inference
     REASONER_MICRO_READ_TIMEOUT: int = int(os.getenv("REASONER_MICRO_READ_TIMEOUT", "30"))  # Read timeout for micro-inference
-    REASONER_MICRO_MAX_INPUT_CHARS: int = int(os.getenv("REASONER_MICRO_MAX_INPUT_CHARS", "200"))  # Max input chars for micro-inference
+    REASONER_MICRO_MAX_INPUT_TOKENS: int = int(os.getenv("REASONER_MICRO_MAX_INPUT_TOKENS", "200"))  # Max input tokens for micro-inference
     REASONER_MICRO_MAX_CANDIDATES: int = int(os.getenv("REASONER_MICRO_MAX_CANDIDATES", "3"))  # Max candidates for micro-inference
 
     # Backward compatibility
@@ -47,9 +47,15 @@ class Config:
 
     # Data Paths
     LOG_DIR: str = os.getenv("LOG_DIR", "data/logs")
+    OUTPUT_DIR: str = os.getenv("OUTPUT_DIR", "data/output")
 
     # Development Settings
     ENABLE_MOCK_CLIENT_IF_NO_KEY: bool = os.getenv("ENABLE_MOCK_CLIENT_IF_NO_KEY", "true").lower() == "true"
+
+    # Advanced Planning Features
+    ENABLE_REFLECTIVE_REPLANNING: bool = os.getenv("ENABLE_REFLECTIVE_REPLANNING", "false").lower() == "true"  # Enable reflective replanning after major information gathering
+    REFLECTIVE_REPLANNING_MIN_INFO_SIZE: int = int(os.getenv("REFLECTIVE_REPLANNING_MIN_INFO_SIZE", "1000"))  # Minimum chars of new info to trigger reflection (chars)
+    REFLECTIVE_REPLANNING_MAX_TOKENS: int = int(os.getenv("REFLECTIVE_REPLANNING_MAX_TOKENS", "200"))  # Max tokens for compressed context
 
     @classmethod
     def ensure_log_directory(cls) -> Path:

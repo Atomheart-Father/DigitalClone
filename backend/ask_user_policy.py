@@ -39,7 +39,7 @@ def needs_user_clarification(content: str) -> bool:
         "您能提供",
         "需要更多信息",
         "请问您",
-        "我想了解一下",
+        "我想了解",
         "能否告诉我",
         "需要澄清",
         "请补充",
