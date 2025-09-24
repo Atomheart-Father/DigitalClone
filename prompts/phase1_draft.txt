@@ -1,0 +1,18 @@
+# Phase-1: 规划草案 (Chat，自然语言 ≤200 token)
+
+你是执行编排器。先用少于 200 token的中文自然语言，给出串/并行步骤草案、涉及工具与关键参数，指出缺参与需要询问之处。不要输出 JSON。
+
+任务概述：
+{task_summary}
+
+可用工具白名单：
+{tools_whitelist}
+
+当前已知参数：
+{known_params}
+
+缺失参数：
+{missing_params}
+
+预算/时间/网络等约束：
+{constraints}

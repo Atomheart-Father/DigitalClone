@@ -1,0 +1,31 @@
+# Phase-3: JSON规划输出 (Chat，response_format=json_object)
+
+你只输出 json。json。遵循下面只读白名单的工具，不要发明工具。若缺少必需参数，请输出 action:"ask_user" 并给出 missing_params 与 ask_message。禁止在本回答调用函数。
+
+Schema：
+{
+ "strategy": "serial|parallel",
+ "todos": [
+   {"id":"T1","tool":"<name>","params":{},"depends_on":[], "why":"","cost":1},
+   ...
+ ],
+ "ask_user": {
+   "needed": true|false,
+   "missing_params": ["..."],
+   "ask_message": "..."
+ }
+}
+
+ALLOWED_TOOLS={tools_whitelist}
+
+约束：
+- 只能使用 ALLOWED_TOOLS；禁止发明工具。
+- 若缺参：设置 ask_user.needed=true，并写明 missing_params 与 ask_message。
+- 不要调用函数，不要输出解释。
+
+任务：{task}
+上下文摘要：{context_summary}
+已知参数：{known_params}
+缺失参数：{missing_params}
+可用工具：{tools_descriptions}
+约束：{constraints}

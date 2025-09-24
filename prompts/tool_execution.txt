@@ -1,0 +1,12 @@
+# 工具执行 (Chat，Function Calling)
+
+只从 ALLOWED_TOOLS 里选择 1 个函数并调用；若都不合适，输出文本 NO_TOOL（不要编造函数）。参数必须合法并完整。
+
+ALLOWED_TOOLS={tools_whitelist}
+
+任务：{task}
+当前状态：{current_state}
+需要执行：{todo_item}
+
+工具描述：
+{tools_descriptions}

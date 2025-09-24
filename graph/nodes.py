@@ -233,6 +233,16 @@ def tool_exec_node(state: AgentState) -> Dict[str, Any]:
     task_context = f"{current_todo.title}\n目标：{current_todo.expected_output}"
     logger.info(f"🔄 Calling tool with context: {task_context}")
 
+    # Build execution prompt for logging
+    from backend.tool_prompt_builder import build_tool_execution_prompt
+    execution_prompt = build_tool_execution_prompt(
+        task=state.get("user_request", "执行任务"),
+        current_state="执行计划中的步骤",
+        todo_item=f"{current_todo.id}: {current_todo.title}",
+        tool_name=tool_name
+    )
+    logger.info(f"🔧 EXECUTION PROMPT: {execution_prompt[:200]}...")
+
     tool_result = call_tool_with_llm(executor, tool_name, task_context, state)
 
     if tool_result["success"]:
@@ -322,56 +332,52 @@ def need_user_node(state: AgentState) -> Dict[str, Any]:
 
 def ask_user_interrupt_node(state: AgentState) -> Dict[str, Any]:
     """
-    Human-in-the-loop interrupt node.
+    Human-in-the-loop interrupt node for AskUser blocking mechanism.
 
-    This node handles resumption after user clarification or parameter input.
-    It can handle both paused tool calls and missing parameter collection.
+    This node handles resumption after user parameter input from planning phase.
+    It processes the needs_user_input state set by planner_generate_node.
     """
-    logger.info("👤 USER INTERACTION COMPLETE - Resuming execution")
+    logger.info("👤 ASK USER INTERRUPT - Processing user parameter input")
 
-    # Check if there's user input to process (from CLI parameter collection)
+    # Handle new AskUser mechanism from planning phase
     if state.get("user_provided_input") and state.get("needs_info"):
         user_input = state["user_provided_input"]
         needs_info = state["needs_info"]
 
-        logger.info(f"📝 PROCESSING user input from CLI: {user_input}")
+        logger.info(f"📝 PROCESSING user input from CLI: {list(user_input.keys())}")
 
-        # Find and update the corresponding todo
-        todo_id = needs_info["todo_id"]
-        for todo in state["plan"]:
-            if todo.id == todo_id:
-                if not todo.input_data:
-                    todo.input_data = {}
+        # This is from planning phase - update plan context instead of individual todos
+        # The plan has been generated but needs user parameters before execution
+        plan_context = needs_info.get("plan_context", {})
 
-                # Update todo with user input
-                for param, value in user_input.items():
-                    todo.input_data[param] = value
-                    logger.info(f"   Updated {param}: {value}")
-
-                logger.info(f"✅ Todo {todo.id} parameters updated, ready for execution")
-                break
+        # Store the user input for later use in todo execution
+        state["collected_user_params"] = user_input
+        logger.info(f"✅ User parameters collected: {list(user_input.keys())}")
 
         # Clear the user input state
         state.pop("user_provided_input", None)
         state.pop("needs_info", None)
 
-    # Check if there's a paused tool call to resume
+        # Resume planner execution - go back to todo dispatch
+        state["current_node"] = "todo_dispatch"
+        logger.info("▶️ RESUMING planner execution with user parameters")
+
+    # Legacy handling for paused tool calls (still supported)
     elif state.get("paused_tool_call"):
         # Resume the paused tool call
         state["pending_tool_call"] = state["paused_tool_call"]
         state["paused_tool_call"] = None
         logger.info("▶️ RESUMING paused tool call after user input")
         logger.info(f"   Tool: {state['pending_tool_call']['tool']}")
-        logger.info(f"   Todo: {state['pending_tool_call']['todo_id']}")
 
-    # Clear clarification state
+    # Clear all user interaction state
     state["awaiting_user"] = False
     state["user_input_buffer"] = None
-    logger.info("🧹 Cleared user interaction state")
+    state.pop("needs_user_input", None)  # Clear the blocking flag
+
+    logger.info("🧹 Cleared user interaction state - execution resuming")
 
     state["execution_path"].append("ask_user_interrupt")
-    state["current_node"] = "ask_user_interrupt"
-
     return state
 
 
@@ -477,19 +483,20 @@ def sufficiency_check_node(state: AgentState) -> Dict[str, Any]:
 
 def planner_generate_node(state: AgentState) -> Dict[str, Any]:
     """
-    Generate a structured plan using the new three-phase approach:
-    1. Chat model creates quick draft (<100 words)
-    2. Reasoner model reviews and improves (<200 word prompt)
-    3. Chat model outputs final JSON plan with execution dependencies
+    Generate a structured plan using the optimized three-phase approach:
 
-    This ensures better planning quality while avoiding Reasoner instability.
+    Phase 1: Chat creates natural language draft (≤200 token)
+    Phase 2: Reasoner micro-review (≤200 token, natural language)
+    Phase 3: Chat outputs JSON plan (response_format=json_object, ask_user support)
+
+    Strict tool whitelist enforcement and AskUser blocking mechanism.
     """
-    logger.info("Generating structured plan using three-phase approach...")
+    logger.info("🎯 Generating optimized plan with AskUser support...")
 
     if not state["messages"]:
         raise ValueError("No messages in state")
 
-    # Get the user request
+    # Get the user request and context
     user_request = ""
     for msg in state["messages"]:
         if msg.role.value == "user":
@@ -497,347 +504,400 @@ def planner_generate_node(state: AgentState) -> Dict[str, Any]:
             break
 
     try:
-        # Phase 1: Chat model creates quick draft (<100 words)
-        logger.info("📝 Phase 1: Chat model creating quick draft...")
-        chat_client = create_llm_client("chat")
+        # ===== PHASE 1: Chat creates natural language draft (≤200 token) =====
+        logger.info("📝 PHASE 1: Chat drafting natural language plan...")
+        from backend.tool_prompt_builder import build_phase1_draft_prompt
 
-        # Get available tools summary for context
-        tools_summary = "可用工具：文件读取(file_read)、网络搜索(web_search)、计算器(calculator)、文档写入(markdown_writer)、RAG搜索(rag_search)等。"
+        # Gather context for planning
+        known_params = _extract_known_parameters(state)
+        missing_params = _identify_missing_parameters(user_request)
+        constraints = _extract_constraints(user_request)
 
-        quick_draft_prompt = f"""用户任务：{user_request}
-
-用<100字规划执行方案：
-1. 步骤序列（串行/并行标注）
-2. 各步骤工具及参数需求
-3. 依赖关系
-4. 用户需提供的参数
-
-{tools_summary}
-
-格式：步骤N(串行/并行)：工具(参数=来源) → 结果"""
-
-        # Manage conversation history - compress if too long
-        total_chars = sum(len(str(msg.content or "")) for msg in state["messages"])
-        # Estimate tokens (rough approximation: 1 token ≈ 4 chars)
-        estimated_tokens = total_chars // 4
-        if estimated_tokens > 8000:  # 8k tokens limit
-            logger.info(f"📚 Compressing conversation history: ~{estimated_tokens} tokens -> summarizing")
-            state["messages"] = _compress_conversation_history(state["messages"])
-
-        try:
-            quick_response = chat_client.generate(
-                messages=[Message(role=Role.USER, content=quick_draft_prompt)],
-                stream=False
-            )
-            draft_plan = quick_response.content.strip()
-            logger.info(f"📝 PHASE 1 COMPLETE - Quick draft ({len(draft_plan)} chars):")
-            logger.info(f"   Draft: {draft_plan}")
-        except Exception as e:
-            logger.warning(f"❌ Phase 1 failed: {e}, using fallback plan")
-            draft_plan = f"分析用户需求：{user_request[:50]}... 使用相关工具获取信息并生成结果。需要文件读取、网络搜索、文档写入等工具。"
-            logger.info(f"📝 PHASE 1 FALLBACK - Draft: {draft_plan}")
-
-        # Phase 2: Reasoner model reviews the draft (<200 word prompt)
-        logger.info("🤔 PHASE 2 START - Reasoner model reviewing draft...")
-
-        # Get available tools for context
-        try:
-            from backend.tool_prompt_builder import build_tool_prompts
-            tool_prompts = build_tool_prompts()
-            available_tools = tool_prompts.get("tool_name_index", {})
-            tools_list = list(available_tools.keys())
-            tools_summary = ', '.join(tools_list)
-        except Exception as e:
-            logger.warning(f"Could not load tools for planning review: {e}")
-            tools_summary = "file_read, web_search, calculator, markdown_writer, rag_search"
-
-        # Fixed reasoner prompt template (<200 words)
-        reasoner_review_template = f"""审查执行方案：
-
-用户需求：{{user_request}}
-
-方案：{{draft_plan}}
-
-工具参数：
-{tools_summary}
-
-重要说明：你只能建议使用上述列表中的工具，不能发明或假设不存在的工具！
-
-分析(<80字)：
-- 流程合理性？
-- 参数完整性？
-- 用户需提供哪些参数？
-
-输出改进建议。"""
-
-        # Don't truncate inputs too aggressively - let the model handle longer context
-        reasoner_prompt = reasoner_review_template.format(
-            user_request=user_request,
-            draft_plan=draft_plan
+        draft_prompt = build_phase1_draft_prompt(
+            task_summary=user_request,
+            known_params=known_params,
+            missing_params=missing_params,
+            constraints=constraints
         )
 
-        logger.info(f"🤔 PHASE 2 PROMPT ({len(reasoner_prompt)} chars):")
-        # Only log first 500 chars to avoid log spam, but don't truncate the actual prompt
-        logger.info(f"   Prompt: {reasoner_prompt[:500]}{'...' if len(reasoner_prompt) > 500 else ''}")
+        # Context management
+        state["messages"] = _ensure_context_budget(state["messages"], 8000)
 
-        # Remove hard truncation - let the model handle the full context
-        # The 200 token limit is a soft guideline, not a hard requirement
+        try:
+            chat_client = create_llm_client("chat")
+            draft_response = chat_client.generate(
+                messages=[Message(role=Role.USER, content=draft_prompt)],
+                stream=False
+            )
+            draft_plan = draft_response.content.strip()
+            logger.info(f"📝 PHASE 1 COMPLETE - Draft ({len(draft_plan)} chars): {draft_plan[:200]}...")
+        except Exception as e:
+            logger.warning(f"❌ Phase 1 failed: {e}, using fallback")
+            draft_plan = f"分析需求：{user_request[:50]}... 需读取文件、搜索信息、生成报告。"
+            logger.info(f"📝 PHASE 1 FALLBACK: {draft_plan}")
+
+        # ===== PHASE 2: Reasoner micro-review (≤200 token, natural language) =====
+        logger.info("🤔 PHASE 2: Reasoner micro-review...")
+        from backend.tool_prompt_builder import build_phase2_review_prompt
+
+        # Extract key elements for review
+        goal = _extract_goal_from_request(user_request)
+        facts = _extract_key_facts(state, draft_plan)
+        draft_points = _summarize_draft_points(draft_plan)
+
+        review_prompt = build_phase2_review_prompt(goal, facts, draft_points)
+
+        logger.info(f"🤔 PHASE 2 PROMPT ({len(review_prompt)} chars)")
 
         try:
             reasoner_client = create_llm_client("reasoner")
             review_response = reasoner_client.generate(
-                messages=[Message(role=Role.USER, content=reasoner_prompt)],
-                stream=False
+                messages=[Message(role=Role.USER, content=review_prompt)],
+                stream=False,
+                response_format=None  # Natural language, no JSON
             )
             review_feedback = review_response.content.strip()
-            logger.info(f"🤔 PHASE 2 COMPLETE - Reasoner review ({len(review_feedback)} chars):")
-            logger.info(f"   Review: {review_feedback}")
+            logger.info(f"🤔 PHASE 2 COMPLETE - Review: {review_feedback[:150]}...")
         except Exception as e:
-            logger.warning(f"❌ Phase 2 failed: {e}, skipping review")
-            review_feedback = "方案基本合理，可以按原计划执行。确保区分串行和并行任务。"
-            logger.info(f"🤔 PHASE 2 FALLBACK - Review: {review_feedback}")
+            logger.warning(f"❌ Phase 2 failed: {e}, using default")
+            review_feedback = "保留"
+            logger.info(f"🤔 PHASE 2 FALLBACK: {review_feedback}")
 
-        # Phase 3: Chat model creates final JSON plan incorporating feedback
-        logger.info("📋 PHASE 3 START - Chat model creating final JSON plan...")
+        # ===== PHASE 3: Chat outputs JSON plan with AskUser support =====
+        logger.info("📋 PHASE 3: Chat generating JSON plan with AskUser...")
+        from backend.tool_prompt_builder import build_phase3_json_plan_prompt
 
-        final_planning_prompt = f"""基于用户需求、初步方案和专家反馈，制定最终执行计划。
+        # Gather comprehensive context
+        context_summary = _build_context_summary(state, draft_plan, review_feedback)
 
-用户需求：{user_request}
-初步方案：{draft_plan}
-专家建议：{review_feedback}
+        json_prompt = build_phase3_json_plan_prompt(
+            task=user_request,
+            context_summary=context_summary,
+            known_params=known_params,
+            missing_params=missing_params,
+            constraints=constraints
+        )
 
-🔴 基于执行流程制定详细计划
-参考初步方案中的步骤、依赖关系和串并行控制，制定完整的执行计划。
-
-注意：只能使用系统已有的工具，不要发明不存在的工具。
-
-请输出JSON格式的详细执行计划：
-
-{{
-  "goal": "任务目标",
-  "success_criteria": "成功标准",
-  "execution_strategy": "serial",
-  "todos": [
-    {{
-      "id": "T1",
-      "title": "读取用户提供的文件内容",
-      "why": "获取文件内容作为报告的基础",
-      "type": "tool",
-      "tool": "file_read",
-      "executor": "chat",
-      "dependencies": [],
-      "parallel_group": null,
-      "execution_order": 1,
-      "input": {{"file_path": "将在执行时从用户输入获取"}},
-      "expected_output": "文件内容的文本",
-      "needs": ["file_path"]
-    }},
-    {{
-      "id": "T2",
-      "title": "将文件内容存入RAG系统",
-      "why": "为后续查询和分析建立知识库",
-      "type": "tool",
-      "tool": "rag_upsert",
-      "executor": "chat",
-      "dependencies": ["T1"],
-      "parallel_group": null,
-      "execution_order": 2,
-      "input": {{"documents": "从T1读取的文件内容"}},
-      "expected_output": "文件内容已存入RAG系统",
-      "needs": []
-    }},
-    {{
-      "id": "T3",
-      "title": "搜索互联网相关信息",
-      "why": "补充背景信息",
-      "type": "tool",
-      "tool": "web_search",
-      "executor": "chat",
-      "dependencies": ["T1"],
-      "parallel_group": null,
-      "execution_order": 3,
-      "input": {{"query": "基于文件内容的关键搜索词"}},
-      "expected_output": "搜索结果",
-      "needs": []
-    }},
-    {{
-      "id": "T4",
-      "title": "生成分析报告",
-      "why": "整合文件内容和搜索结果生成最终报告",
-      "type": "tool",
-      "tool": "markdown_writer",
-      "executor": "chat",
-      "dependencies": ["T1", "T2", "T3"],
-      "parallel_group": null,
-      "execution_order": 4,
-      "input": {{"content": "整合的文件内容和搜索结果", "filename": "analysis_report"}},
-      "expected_output": "保存到OUTPUT_DIR的markdown文件",
-      "needs": []
-    }}
-  ]
-}}
-
-执行控制规范：
-- dependencies: ["T1"] - 必须完成的前置任务ID数组
-- parallel_group: "group1" - 同组任务可并行执行（相同组名）
-- execution_order: 1 - 组内执行顺序（从小到大）
-- needs: ["file_path"] - 需要用户提供的参数，系统会中断询问
-
-执行规则：
-1. 相同parallel_group的任务按execution_order顺序执行
-2. 不同parallel_group间按dependencies关系串行执行
-3. 有needs字段的任务会中断执行收集用户输入
-4. markdown_writer自动使用OUTPUT_DIR环境变量
-
-只输出JSON格式。"""
-
-        logger.info(f"📋 PHASE 3 PROMPT ({len(final_planning_prompt)} chars):")
-        logger.info(f"   User Request: {user_request}")
-        logger.info(f"   Draft Plan: {draft_plan}")
-        logger.info(f"   Review Feedback: {review_feedback}")
-
-        # Manage conversation history for Phase 3 as well
-        total_chars = sum(len(str(msg.content or "")) for msg in state["messages"])
-        # Estimate tokens (rough approximation: 1 token ≈ 4 chars)
-        estimated_tokens = total_chars // 4
-        if estimated_tokens > 8000:  # 8k tokens limit
-            logger.info(f"📚 Compressing conversation history for Phase 3: ~{estimated_tokens} tokens")
-            state["messages"] = _compress_conversation_history(state["messages"])
+        # Final context management
+        state["messages"] = _ensure_context_budget(state["messages"], 8000)
 
         try:
             final_response = chat_client.generate(
-                messages=[Message(role=Role.USER, content=final_planning_prompt)],
+                messages=[Message(role=Role.USER, content=json_prompt)],
                 stream=False,
-                response_format={"type": "json_object"}
+                response_format={"type": "json_object"}  # Only place using JSON mode
             )
 
-            # Parse final JSON plan
             content = final_response.content.strip()
-            logger.info(f"📋 PHASE 3 RESPONSE ({len(content)} chars):")
-            logger.info(f"   Raw JSON: {content}")
+            logger.info(f"📋 PHASE 3 RESPONSE ({len(content)} chars)")
 
             try:
                 plan_data = json.loads(content)
-                logger.info("📋 PHASE 3 COMPLETE - Final JSON plan parsing successful")
+                logger.info("📋 PHASE 3 COMPLETE - JSON plan parsed successfully")
             except json.JSONDecodeError as e:
                 logger.error(f"❌ JSON parsing failed: {e}")
-                # Fallback: try to extract JSON
+                # Try to extract JSON
                 import re
                 json_match = re.search(r'\{.*\}', content, re.DOTALL)
                 if json_match:
                     plan_data = json.loads(json_match.group())
-                    logger.info("📋 PHASE 3 COMPLETE - JSON extracted and parsed from fallback")
+                    logger.info("📋 Extracted JSON from response")
                 else:
-                    raise ValueError(f"Failed to parse JSON plan: {content[:200]}...")
+                    raise ValueError(f"Failed to parse JSON: {content[:200]}...")
 
         except Exception as e:
-            logger.warning(f"Phase 3 failed: {e}, using fallback plan")
-            # Create a simple fallback plan
-            plan_data = {
-                "goal": f"处理用户请求：{user_request[:50]}...",
-                "success_criteria": "成功完成用户任务",
-                "execution_strategy": "serial",
-                "todos": [
-                    {
-                        "id": "T1",
-                        "title": "分析用户需求并执行任务",
-                        "why": "直接响应用户请求",
-                        "type": "tool",
-                        "tool": "file_read",  # Default tool
-                        "executor": "chat",
-                        "dependencies": [],
-                        "parallel_group": None,
-                        "execution_order": 1,
-                        "input": {"file_path": "需要用户指定"},
-                "expected_output": "任务执行结果",
-                "needs": ["file_path"]
-                    }
-                ]
+            logger.warning(f"❌ Phase 3 failed: {e}, using fallback")
+            plan_data = _create_fallback_plan(user_request)
+            logger.info("📋 PHASE 3 FALLBACK: Created basic plan")
+
+        # ===== 处理AskUser和计划转换 =====
+        # 处理ask_user字段 - 这是关键的阻塞机制
+        ask_user_info = plan_data.get("ask_user", {})
+        if ask_user_info.get("needed", False):
+            logger.info("🚨 PLAN REQUIRES USER INPUT - Setting up blocking mechanism")
+            state["needs_user_input"] = {
+                "todo_title": "参数收集",
+                "needs": ask_user_info.get("missing_params", []),
+                "ask_message": ask_user_info.get("ask_message", "需要提供参数"),
+                "plan_context": {
+                    "goal": plan_data.get("goal", ""),
+                    "todos": plan_data.get("todos", [])
+                }
             }
-            logger.info("✅ Fallback plan created")
+            # 设置状态以触发ask_user_interrupt
+            state["current_node"] = "ask_user_interrupt"
+            state["execution_path"].append("planner_generate")
+            logger.info(f"🛑 BLOCKING FOR USER INPUT: {ask_user_info.get('missing_params', [])}")
+            return state
 
-        # Validate and convert to TodoItem objects
-        required_keys = ["goal", "success_criteria", "todos"]
-        for key in required_keys:
-            if key not in plan_data:
-                logger.warning(f"Missing required key: {key}, using default")
-                if key == "goal":
-                    plan_data["goal"] = f"处理用户请求：{user_request[:50]}..."
-                elif key == "success_criteria":
-                    plan_data["success_criteria"] = "成功完成用户任务"
-                elif key == "todos":
-                    plan_data["todos"] = []
-
+        # 正常处理：转换JSON计划为TodoItem对象
         todos = []
-        for todo_data in plan_data["todos"]:
-            required_todo_keys = ["id", "title", "type"]
-            for key in required_todo_keys:
-                if key not in todo_data:
-                    logger.warning(f"Todo missing required key: {key}, skipping")
+        for todo_data in plan_data.get("todos", []):
+            # 验证工具是否在白名单中
+            tool_name = todo_data.get("tool")
+            if tool_name:
+                from backend.tool_prompt_builder import get_allowed_tools_whitelist
+                allowed_tools = get_allowed_tools_whitelist()
+                if tool_name not in allowed_tools:
+                    logger.warning(f"⚠️ 工具 '{tool_name}' 不在白名单中，跳过此任务")
                     continue
+
+            # 验证必需字段
+            required_fields = ["id", "tool", "params", "depends_on", "why", "cost"]
+            if not all(field in todo_data for field in required_fields):
+                logger.warning(f"⚠️ 任务缺少必需字段: {todo_data.get('id', 'unknown')}")
+                continue
 
             todos.append(TodoItem(
                 id=todo_data["id"],
-                title=todo_data["title"],
-                why=todo_data.get("why", ""),
-                type=TodoType(todo_data["type"]),
-                tool=todo_data.get("tool"),
-                executor=todo_data.get("executor", "chat"),
-                input_data=todo_data.get("input"),
-                dependencies=todo_data.get("dependencies", []),
-                parallel_group=todo_data.get("parallel_group"),
-                execution_order=todo_data.get("execution_order", 0),
+                title=todo_data.get("title", f"执行{tool_name}"),
+                why=todo_data["why"],
+                type=TodoType.TOOL,
+                tool=tool_name,
+                executor="chat",  # 默认chat，之后可优化
+                input_data=todo_data["params"],
+                dependencies=todo_data["depends_on"],
+                parallel_group=None,  # 暂时不支持并行
+                execution_order=0,    # 暂时不支持并行
                 expected_output=todo_data.get("expected_output", ""),
-                needs=todo_data.get("needs", [])
+                needs=[]  # Phase 3中needs应为空，由ask_user处理
             ))
 
+        # 设置最终计划
         state["plan"] = todos
-        state["execution_strategy"] = plan_data.get("execution_strategy", "serial")
+        state["execution_strategy"] = plan_data.get("strategy", "serial")
 
-        logger.info(f"🎯 FINAL PLAN GENERATED - {len(todos)} todos (strategy: {state['execution_strategy']})")
+        logger.info(f"🎯 PLAN COMPLETE - {len(todos)} todos (strategy: {state['execution_strategy']})")
         logger.info(f"📊 Goal: {plan_data.get('goal', 'N/A')}")
-        logger.info(f"✅ Success Criteria: {plan_data.get('success_criteria', 'N/A')}")
 
         for i, todo in enumerate(todos, 1):
             deps = f" ← {todo.dependencies}" if todo.dependencies else ""
-            parallel = f" [并行组:{todo.parallel_group}]" if todo.parallel_group else ""
-            needs = f" [需要用户输入:{todo.needs}]" if todo.needs else ""
             tool_info = f"[{todo.tool}]" if todo.tool else ""
-            executor_info = f"({todo.executor})" if todo.executor else ""
-            logger.info(f"   {i}. {todo.id}: {todo.title} {tool_info}{executor_info}{deps}{parallel}{needs}")
+            logger.info(f"   {i}. {todo.id}: {todo.title} {tool_info}{deps}")
             if todo.why:
                 logger.info(f"      原因: {todo.why}")
-            if todo.expected_output:
-                logger.info(f"      预期输出: {todo.expected_output}")
 
     except Exception as e:
-        logger.error(f"Plan generation failed: {e}")
+        logger.error(f"❌ Plan generation failed: {e}")
         import traceback
         logger.error(f"Traceback: {traceback.format_exc()}")
-        # Create minimal fallback plan
-        state["plan"] = [
-            TodoItem(
-                id="T1",
-                title="处理用户请求",
-                why="执行用户的基本需求",
-                type=TodoType.TOOL,
-                tool="file_read",
-                executor="chat",
-                input_data={"file_path": "需要用户指定"},
-                dependencies=[],
-                parallel_group=None,
-                execution_order=1,
-                expected_output="任务结果",
-                needs=["file_path"]
-            )
-        ]
-        state["execution_strategy"] = "serial"
-        logger.info("✅ Emergency fallback plan created")
+
+        # 紧急fallback - 触发ask_user
+        state["needs_user_input"] = {
+            "todo_title": "紧急参数收集",
+            "needs": ["file_path"],
+            "ask_message": f"系统异常，需要您提供文件路径来处理：{user_request[:50]}...",
+            "plan_context": {"goal": user_request}
+        }
+        state["current_node"] = "ask_user_interrupt"
+        logger.info("🚨 EMERGENCY: Triggering ask_user due to planning failure")
 
     state["execution_path"].append("planner_generate")
-    state["current_node"] = "planner_generate"
-
     return state
+
+
+# ===== 规划辅助函数 =====
+
+def _extract_known_parameters(state: AgentState) -> str:
+    """从状态中提取已知参数信息。"""
+    # 从消息历史中提取可能已知的参数
+    known = []
+    for msg in state["messages"]:
+        content = str(msg.content or "").lower()
+        if "文件" in content or "路径" in content:
+            known.append("可能有文件路径信息")
+        if "搜索" in content or "查询" in content:
+            known.append("可能有搜索关键词")
+    return "; ".join(known) if known else "无明确已知参数"
+
+
+def _identify_missing_parameters(request: str) -> str:
+    """识别请求中可能缺失的参数。"""
+    missing = []
+    request_lower = request.lower()
+
+    # 检查常见缺失参数模式
+    if "文件" in request_lower and "路径" not in request_lower:
+        missing.append("file_path")
+    if "搜索" in request_lower and ("关键词" not in request_lower and "内容" not in request_lower):
+        missing.append("search_query")
+    if "输出" in request_lower and "文件名" not in request_lower:
+        missing.append("output_filename")
+
+    return ", ".join(missing) if missing else "无明显缺失参数"
+
+
+def _extract_constraints(request: str) -> str:
+    """从请求中提取约束条件。"""
+    constraints = []
+    request_lower = request.lower()
+
+    if "快速" in request_lower or "紧急" in request_lower:
+        constraints.append("时间紧急")
+    if "详细" in request_lower or "全面" in request_lower:
+        constraints.append("需要详细输出")
+    if "简单" in request_lower or "简要" in request_lower:
+        constraints.append("简化输出")
+
+    return "; ".join(constraints) if constraints else "无特殊约束"
+
+
+def _extract_goal_from_request(request: str) -> str:
+    """从请求中提取核心目标。"""
+    # 简化为前50字符
+    return request[:50] if len(request) > 50 else request
+
+
+def _extract_key_facts(state: AgentState, draft_plan: str) -> str:
+    """提取关键事实信息。"""
+    facts = []
+    # 从状态和草稿中提取关键信息
+    if "文件" in draft_plan:
+        facts.append("涉及文件操作")
+    if "搜索" in draft_plan:
+        facts.append("需要信息搜索")
+    if "报告" in draft_plan or "输出" in draft_plan:
+        facts.append("需要生成输出")
+
+    # 从消息历史中提取
+    for msg in state["messages"][-3:]:  # 最近3条消息
+        content = str(msg.content or "")
+        if len(content) > 20:
+            facts.append(f"上下文: {content[:30]}...")
+
+    return "; ".join(facts[:3]) if facts else "基本任务执行"
+
+
+def _summarize_draft_points(draft_plan: str) -> str:
+    """总结草稿要点。"""
+    # 提取关键步骤信息
+    lines = draft_plan.split('\n')
+    points = []
+    for line in lines[:3]:  # 前3行要点
+        if line.strip():
+            points.append(line.strip()[:25])
+
+    return "; ".join(points) if points else draft_plan[:40]
+
+
+def _build_context_summary(state: AgentState, draft_plan: str, review_feedback: str) -> str:
+    """构建综合上下文摘要。"""
+    parts = []
+
+    # 添加草稿计划
+    if draft_plan:
+        parts.append(f"草稿计划: {draft_plan[:100]}...")
+
+    # 添加审阅反馈
+    if review_feedback and review_feedback != "保留":
+        parts.append(f"审阅建议: {review_feedback[:50]}...")
+
+    # 添加历史上下文
+    recent_messages = []
+    for msg in reversed(state["messages"]):
+        if msg.role.value == "user":
+            recent_messages.append(f"用户: {str(msg.content)[:50]}...")
+            break
+
+    if recent_messages:
+        parts.extend(recent_messages)
+
+    return " | ".join(parts) if parts else "标准任务执行"
+
+
+def _ensure_context_budget(messages: List, budget_tokens: int) -> List:
+    """确保消息列表在token预算内。"""
+    if not messages:
+        return messages
+
+    # 粗略估算token (1 token ≈ 4 chars)
+    total_chars = sum(len(str(msg.content or "")) for msg in messages)
+    estimated_tokens = total_chars // 4
+
+    if estimated_tokens <= budget_tokens:
+        return messages
+
+    # 需要压缩 - 保留最近的消息
+    logger.info(f"📚 压缩上下文: ~{estimated_tokens} tokens -> 预算{budget_tokens}")
+    return _compress_conversation_history(messages)
+
+
+def _create_fallback_plan(user_request: str) -> Dict[str, Any]:
+    """创建基础fallback计划，包含ask_user支持。"""
+    return {
+        "strategy": "serial",
+        "todos": [
+            {
+                "id": "T1",
+                "tool": "file_read",
+                "params": {},
+                "depends_on": [],
+                "why": "读取用户指定的文件内容",
+                "cost": 1
+            }
+        ],
+        "ask_user": {
+            "needed": True,
+            "missing_params": ["file_path"],
+            "ask_message": f"请提供文件路径来处理您的请求：{user_request[:50]}..."
+        }
+    }
+
+
+# ===== 反思规划辅助函数 =====
+
+def _extract_goal_from_current_plan(plan: List) -> str:
+    """从当前计划中提取目标。"""
+    if not plan:
+        return "执行用户任务"
+
+    # 从第一个任务的描述中推断目标
+    first_task = plan[0]
+    if hasattr(first_task, 'title') and first_task.title:
+        return first_task.title[:50]
+
+    return "执行用户任务"
+
+
+def _format_plan_for_modification(plan: List) -> str:
+    """格式化计划用于修改。"""
+    if not plan:
+        return "当前无计划"
+
+    formatted = []
+    for i, todo in enumerate(plan, 1):
+        status = "✅" if todo.output else "⏳"
+        deps = f" ← {todo.dependencies}" if todo.dependencies else ""
+        formatted.append(f"{i}. {status} {todo.id}: {todo.title}{deps}")
+
+    return "\n".join(formatted)
+
+
+def _create_todos_from_json(plan_data: Dict[str, Any]) -> List[TodoItem]:
+    """从JSON数据创建TodoItem列表。"""
+    todos = []
+    for todo_data in plan_data.get("todos", []):
+        # 验证必需字段
+        if not all(field in todo_data for field in ["id", "tool", "params", "depends_on", "why", "cost"]):
+            logger.warning(f"跳过不完整的任务: {todo_data.get('id', 'unknown')}")
+            continue
+
+        todos.append(TodoItem(
+            id=todo_data["id"],
+            title=todo_data.get("title", f"执行{todo_data['tool']}"),
+            why=todo_data["why"],
+            type=TodoType.TOOL,
+            tool=todo_data["tool"],
+            executor="chat",
+            input_data=todo_data["params"],
+            dependencies=todo_data["depends_on"],
+            parallel_group=None,
+            execution_order=0,
+            expected_output=todo_data.get("expected_output", ""),
+            needs=[]
+        ))
+
+    return todos
 
 
 def planner_gate_node(state: AgentState) -> Dict[str, Any]:
@@ -1260,6 +1320,16 @@ def todo_dispatch_node(state: AgentState) -> Dict[str, Any]:
             current_value = todo.input_data.get(param) if todo.input_data else None
             # Check if value is missing or is a placeholder
             if not current_value or current_value in ["需要用户指定", "用户将提供", "将在执行时从用户输入获取"]:
+                # Check if we have collected user params from planning phase
+                collected_params = state.get("collected_user_params", {})
+                if param in collected_params:
+                    # Use collected parameter
+                    if not todo.input_data:
+                        todo.input_data = {}
+                    todo.input_data[param] = collected_params[param]
+                    logger.info(f"📝 Applied collected user param '{param}': {collected_params[param]}")
+                    continue
+
                 missing_params.append(param)
                 has_all_needed = False
 
@@ -1567,44 +1637,28 @@ def reflective_replanning_node(state: AgentState) -> Dict[str, Any]:
         compressed_context = compression_response.content.strip()
         logger.info(f"🧠 COMPRESSED CONTEXT ({len(compressed_context)} chars): {compressed_context[:200]}...")
 
-        # Phase 2: Reasoner evaluates if plan changes are needed
-        # Get available tools for context
-        try:
-            from backend.tool_prompt_builder import build_tool_prompts
-            tool_prompts = build_tool_prompts()
-            available_tools = tool_prompts.get("tool_name_index", {})
-            tools_list = list(available_tools.keys())
-        except Exception as e:
-            logger.warning(f"Could not load tools for reflection: {e}")
-            tools_list = ["file_read", "web_search", "rag_search", "tabular_qa", "calculator", "datetime", "markdown_writer"]
+        # Phase 2: Reasoner evaluates if plan changes are needed (≤200 token)
+        from backend.tool_prompt_builder import build_reflective_replanning_prompt
 
+        # Extract goal from current plan or state
+        goal = _extract_goal_from_current_plan(current_plan)
+        current_plan_summary = _summarize_current_plan(current_plan)
+
+        reflection_prompt = build_reflective_replanning_prompt(
+            goal=goal,
+            new_facts=compressed_context,
+            current_plan=current_plan_summary
+        )
+
+        logger.info("🧠 REFLECTIVE PHASE 2 - Reasoner micro-decision (≤200 token)")
         reasoner_client = create_llm_client("reasoner")
-
-        reflection_prompt = f"""评估是否需要修改执行计划：
-
-压缩的上下文：{compressed_context}
-
-可用工具列表：{', '.join(tools_list)}
-
-重要说明：你只能建议使用上述列表中的工具，不能发明或假设不存在的工具！
-
-请判断：
-- 当前计划是否仍合适？
-- 新信息是否需要调整步骤？
-- 是否需要添加/删除/修改任务？
-
-如果需要修改，给出具体的修改建议（必须使用上述可用工具）。
-如果不需要修改，只回复"无需修改"。
-
-输出格式：简洁的判断和建议。"""
-
-        logger.info("🧠 REFLECTIVE PHASE 2 - Reasoner evaluating plan changes")
         reflection_response = reasoner_client.generate(
             messages=[Message(role=Role.USER, content=reflection_prompt)],
-            stream=False
+            stream=False,
+            response_format=None  # Natural language output
         )
         reflection_result = reflection_response.content.strip()
-        logger.info(f"🧠 REFLECTION RESULT: {reflection_result[:200]}...")
+        logger.info(f"🧠 REFLECTION DECISION: {reflection_result[:100]}...")
 
         # Check if changes are needed
         if "无需修改" not in reflection_result.lower() and len(reflection_result.strip()) > 0:

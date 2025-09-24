@@ -1,0 +1,9 @@
+# AskUser降级处理 (Chat)
+
+你拿到的参数仍不完整。若能安全合理地假设默认值，请补全并继续；否则请输出中文原因，并给出清晰的 ask_message 以便向用户询问。
+只输出中文文本。
+
+任务：{task}
+当前参数：{current_params}
+缺失参数：{missing_params}
+已尝试次数：{attempt_count}
