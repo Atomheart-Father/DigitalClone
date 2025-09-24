@@ -12,16 +12,16 @@ import logging
 from typing import List, Optional
 
 import config
-import agent_core
 import message_types
 import logger
+from tool_prompt_builder import load_system_prompt
+from graph import graph_app
+from graph.state import create_initial_state
 
 # 为了兼容性，创建别名
 config = config.config
-agent = agent_core.agent
 Message = message_types.Message
 Role = message_types.Role
-RouteDecision = message_types.RouteDecision
 ConversationLogger = logger.ConversationLogger
 
 # Configure logging
@@ -98,6 +98,7 @@ class CLIApp:
         print("  :tools 列出可用工具")
         print("  :q     退出程序")
         print("  :clear 清空对话历史")
+        print("  :graph 显示图状态")
         print("-" * 50)
 
     def _handle_special_command(self, command: str) -> bool:
@@ -129,6 +130,10 @@ class CLIApp:
 
         elif cmd == 'history':
             self._show_history()
+            return False
+
+        elif cmd == 'graph':
+            self._show_graph_status()
             return False
 
         else:
@@ -197,26 +202,96 @@ class CLIApp:
             print(f"处理输入时出错: {e}")
 
     def _handle_new_turn(self, user_input: str):
-        """Handle a new conversation turn."""
+        """Handle a new conversation turn using LangGraph."""
         if self.stream:
             print("正在思考...", end="", flush=True)
         else:
             print("正在思考...", end="", flush=True)
 
         try:
-            # Process the turn
-            result = agent.process_turn(user_input, self.conversation_history, stream=self.stream)
+            # Create initial state
+            initial_state = create_initial_state(user_input)
 
+            # Add system prompt based on route (will be determined by graph)
+            # For now, start with empty system prompt, graph will handle routing
+
+            # Execute graph
             if self.stream:
-                # Handle streaming response
-                self._handle_streaming_response(result, user_input)
+                # Handle streaming with graph
+                self._handle_graph_streaming(initial_state)
             else:
-                # Handle regular response
-                self._handle_regular_response(result)
+                # Handle regular graph execution
+                self._handle_graph_execution(initial_state)
 
         except Exception as e:
             print(f"\r处理请求时出错: {e}")
             logger.error(f"Error in conversation turn: {e}")
+
+    def _handle_graph_execution(self, initial_state):
+        """Handle regular graph execution."""
+        # Execute the graph
+        final_state = graph_app.invoke(initial_state)
+
+        # Extract the final answer
+        if final_state["final_answer"]:
+            print(f"\r{final_state['final_answer']}")
+        elif final_state["messages"] and len(final_state["messages"]) > 1:
+            # Get the last assistant message
+            last_msg = final_state["messages"][-1]
+            if last_msg.role == Role.ASSISTANT:
+                print(f"\r{last_msg.content}")
+
+        # Update conversation history
+        self.conversation_history = final_state["messages"]
+
+        # Log the conversation
+        self.logger.log_turn(
+            route_decision=final_state.get("route_decision"),
+            messages=final_state["messages"],
+            tool_calls_count=final_state["tool_call_count"],
+            ask_cycles_used=final_state.get("ask_cycles_used", 0)
+        )
+
+    def _handle_graph_streaming(self, initial_state):
+        """Handle streaming graph execution."""
+        # For now, implement basic streaming
+        # In a full implementation, we'd need to stream through the graph
+        # This is a simplified version
+
+        accumulated_content = ""
+
+        try:
+            # Execute graph step by step for demonstration
+            # In practice, this would be more complex with actual streaming
+
+            # For demonstration, just execute normally but simulate streaming
+            final_state = graph_app.invoke(initial_state)
+
+            # Simulate streaming by yielding content progressively
+            if final_state["messages"] and len(final_state["messages"]) > 1:
+                last_msg = final_state["messages"][-1]
+                if last_msg.role == Role.ASSISTANT and last_msg.content:
+                    # Simulate streaming by printing word by word
+                    words = last_msg.content.split()
+                    for word in words:
+                        print(word + " ", end="", flush=True)
+                        accumulated_content += word + " "
+                    print()  # New line at end
+
+            # Update conversation history
+            self.conversation_history = final_state["messages"]
+
+            # Log the conversation
+            self.logger.log_turn(
+                route_decision=final_state.get("route_decision"),
+                messages=final_state["messages"],
+                tool_calls_count=final_state["tool_call_count"],
+                ask_cycles_used=final_state.get("ask_cycles_used", 0)
+            )
+
+        except Exception as e:
+            print(f"\n流式输出处理出错: {e}")
+            logger.error(f"Error in streaming graph execution: {e}")
 
     def _handle_regular_response(self, result):
         """Handle regular (non-streaming) response."""
@@ -291,6 +366,17 @@ class CLIApp:
         except Exception as e:
             print(f"\n流式输出处理出错: {e}")
             logger.error(f"Error handling streaming response: {e}")
+
+    def _show_graph_status(self):
+        """Show current graph execution status."""
+        print("\n=== LangGraph 执行状态 ===")
+        print(f"当前节点: user_input (等待用户输入)")
+        print(f"对话轮数: {len([msg for msg in self.conversation_history if msg.role == Role.USER])}")
+        print(f"消息总数: {len(self.conversation_history)}")
+        print(f"等待用户输入: {getattr(self, 'awaiting_user_input', False)}")
+        print(f"流式输出: {self.stream}")
+        print("执行路径: user_input → decide_route → model_call → [tool_exec|need_user|end]")
+        print("=" * 30)
 
     def _handle_clarification(self, clarification: str):
         """Handle user clarification after AskUser."""

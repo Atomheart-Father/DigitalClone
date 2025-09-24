@@ -28,7 +28,9 @@ TOOL_META = {
                 "description": "时区选择：local(本地时区)、utc(UTC时区)",
                 "default": "local"
             }
-        }
+        },
+        "required": [],
+        "additionalProperties": False
     }
 }
 

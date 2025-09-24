@@ -25,7 +25,7 @@ class AgentRouter:
 
     # Keywords that indicate complex reasoning/planning tasks
     COMPLEX_KEYWORDS = {
-        '计划', '规划', '分解', '多步骤', '调研', '写方案', '评估', '对比',
+        '计划', '规划', '制定', '分解', '多步骤', '调研', '写方案', '评估', '对比',
         '流程', '依赖', '里程碑', 'roadmap', 'strategy', 'systematic',
         'complex', 'comprehensive', 'detailed', 'step-by-step', 'breakdown'
     }
@@ -39,6 +39,8 @@ class AgentRouter:
         r'→',      # Unicode arrows
         r'步骤',   # Chinese "steps"
         r'阶段',   # Chinese "stages/phases"
+        r'第[一二三四五六七八九十]+步',  # Chinese numbered steps: 第一步、第二步等
+        r'[一二三四五六七八九十]+、',  # Chinese numbered lists: 一、 二、 等
     ]
 
     def __init__(self):
@@ -89,11 +91,11 @@ class AgentRouter:
                 confidence=0.6
             )
 
-        # Check if tools are likely needed in combination
+        # Check if tools are likely needed in combination (2+ different operations)
         if self._check_tool_combination_needed(user_input):
             return RouteDecision(
                 engine="reasoner",
-                reason="可能需要组合多个工具",
+                reason="需要组合多个不同类型的工具操作",
                 confidence=0.7
             )
 
@@ -121,11 +123,22 @@ class AgentRouter:
         return False
 
     def _check_tool_combination_needed(self, text: str) -> bool:
-        """Check if multiple tools might be needed."""
-        # Simple heuristic: if input mentions multiple different operations
-        operations = ['计算', '算', '时间', '日期', '搜索', '查找']
-        operation_count = sum(1 for op in operations if op in text)
-        return operation_count > 1
+        """Check if multiple different tools might be needed."""
+        # Define distinct tool operation categories
+        tool_categories = {
+            'math': ['计算', '算', '数学'],
+            'time': ['时间', '日期', '几号', '现在'],
+            'search': ['搜索', '查找', '查询']
+        }
+
+        # Count how many different tool categories are mentioned
+        mentioned_categories = set()
+        for category, keywords in tool_categories.items():
+            if any(keyword in text for keyword in keywords):
+                mentioned_categories.add(category)
+
+        # Route to reasoner only if multiple different tool categories are needed
+        return len(mentioned_categories) >= 2
 
     def route_with_reasoner_confirmation(
         self,

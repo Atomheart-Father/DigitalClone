@@ -34,14 +34,26 @@ class LLMClient(ABC):
         messages: List[Message],
         functions: Optional[List[Dict[str, Any]]] = None,
         stream: bool = False,
+        system_prompt: Optional[str] = None,
         **kwargs
     ) -> Union[LLMResponse, Generator[StreamingChunk, None, None]]:
         """Generate a response from the LLM."""
         pass
 
-    def _convert_messages_to_api_format(self, messages: List[Message]) -> List[Dict[str, Any]]:
+    def _convert_messages_to_api_format(
+        self,
+        messages: List[Message],
+        system_prompt: Optional[str] = None
+    ) -> List[Dict[str, Any]]:
         """Convert internal Message objects to API format."""
         api_messages = []
+
+        # Add system prompt if provided
+        if system_prompt:
+            api_messages.append({
+                "role": "system",
+                "content": system_prompt
+            })
 
         for msg in messages:
             api_msg = {
@@ -157,6 +169,7 @@ class DeepSeekChatClient(LLMClient):
         messages: List[Message],
         functions: Optional[List[Dict[str, Any]]] = None,
         stream: bool = False,
+        system_prompt: Optional[str] = None,
         **kwargs
     ) -> Union[LLMResponse, Generator[StreamingChunk, None, None]]:
         """Generate response using DeepSeek Chat model."""
@@ -171,7 +184,7 @@ class DeepSeekChatClient(LLMClient):
 
         payload = {
             "model": self.model_name,
-            "messages": self._convert_messages_to_api_format(messages),
+            "messages": self._convert_messages_to_api_format(messages, system_prompt),
             "temperature": 0.7,
             "max_tokens": 2000,
             "stream": stream
@@ -251,6 +264,7 @@ class DeepSeekReasonerClient(LLMClient):
         messages: List[Message],
         functions: Optional[List[Dict[str, Any]]] = None,
         stream: bool = False,
+        system_prompt: Optional[str] = None,
         **kwargs
     ) -> Union[LLMResponse, Generator[StreamingChunk, None, None]]:
         """Generate response using DeepSeek Reasoner model."""
@@ -265,7 +279,7 @@ class DeepSeekReasonerClient(LLMClient):
 
         payload = {
             "model": self.model_name,
-            "messages": self._convert_messages_to_api_format(messages),
+            "messages": self._convert_messages_to_api_format(messages, system_prompt),
             "temperature": 0.1,  # Lower temperature for reasoning tasks
             "max_tokens": 4000,  # Higher token limit for complex reasoning
             "stream": stream
@@ -341,6 +355,7 @@ class MockClient(LLMClient):
         messages: List[Message],
         functions: Optional[List[Dict[str, Any]]] = None,
         stream: bool = False,
+        system_prompt: Optional[str] = None,
         **kwargs
     ) -> Union[LLMResponse, Generator[StreamingChunk, None, None]]:
         """Generate mock response for development."""

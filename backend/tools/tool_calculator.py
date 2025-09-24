@@ -21,10 +21,11 @@ TOOL_META = {
         "properties": {
             "expression": {
                 "type": "string",
-                "description": "数学表达式，如 '2 + 3 * 4' 或 '(12 + 7) * 3^2'"
+                "description": "数学表达式，如 '2 + 3 * 4' 或 '(12 + 7) * 3**2'"
             }
         },
-        "required": ["expression"]
+        "required": ["expression"],
+        "additionalProperties": False
     }
 }
 
