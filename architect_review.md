@@ -28,11 +28,11 @@
 
 ## 🔧 技术决策分析
 
-### Decision 1: 移除 response_format 参数
+### Decision 1: 改用Chat模型进行规划
 
-**背景**: DeepSeek API的response_format=json_object导致空响应
-**选择**: 移除参数保证可用性 vs 保留参数等待API修复
-**理由**: 可用性优先，符合"可用性高于一致性"的分布式系统原则
+**背景**: DeepSeek Reasoner在复杂规划任务中返回空响应
+**选择**: 改用Chat模型 vs 等待Reasoner API修复
+**理由**: 快速恢复功能，Chat模型稳定可靠，符合用户体验优先原则
 
 ### Decision 2: 超时策略分层
 

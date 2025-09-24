@@ -66,11 +66,14 @@ The planner execution was blocking indefinitely when calling DeepSeek reasoner A
 
 ### After Fix
 ```bash
-🤖 Calling planner_generate_node...
-⏱️  API call completed in 197.93s (status: 200)
-📏 Response length: 0 characters
-✅ Graceful degradation: returns default completion message
-⏱️  Total execution: 198.36s (no hang)
+🎯 Using Chat model for planning (Reasoner has empty response issues)
+✅ Chat model JSON parsing successful
+📝 Generated plan with 4 todos
+  - T1: 收集用户学习目标和约束信息 (chat)
+  - T2: 搜索相关学习资源和最佳实践 (tool)
+  - T3: 计算学习时间分配和进度 (tool)
+  - T4: 生成个性化学习计划文档 (write)
+✅ Planning completed successfully in ~8s
 ```
 
 ## 🔄 Migration Notes
