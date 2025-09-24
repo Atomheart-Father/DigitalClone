@@ -232,8 +232,9 @@ class CLIApp:
 
             # Execute graph
             if self.stream:
-                # Handle streaming with graph
-                self._handle_graph_streaming(initial_state)
+                # For streaming, bypass LangGraph and use direct LLM streaming
+                # This avoids the blocking issue with graph.invoke/stream
+                self._handle_direct_streaming(user_input)
             else:
                 # Handle regular graph execution
                 self._handle_graph_execution(initial_state)
@@ -272,46 +273,129 @@ class CLIApp:
         )
 
     def _handle_graph_streaming(self, initial_state):
-        """Handle streaming graph execution."""
-        # For now, implement basic streaming
-        # In a full implementation, we'd need to stream through the graph
-        # This is a simplified version
-
-        accumulated_content = ""
-
+        """Handle streaming graph execution using LangGraph's stream API."""
         try:
-            # Execute graph step by step for demonstration
-            # In practice, this would be more complex with actual streaming
-
-            # For demonstration, just execute normally but simulate streaming
             config = {"configurable": {"thread_id": "cli-session"}}
-            final_state = graph_app.invoke(initial_state, config=config)
 
-            # Simulate streaming by yielding content progressively
-            if final_state["messages"] and len(final_state["messages"]) > 1:
-                last_msg = final_state["messages"][-1]
-                if last_msg.role == Role.ASSISTANT and last_msg.content:
-                    # Simulate streaming by printing word by word
-                    words = last_msg.content.split()
-                    for word in words:
-                        print(word + " ", end="", flush=True)
-                        accumulated_content += word + " "
-                    print()  # New line at end
+            # Use LangGraph's stream method for true streaming
+            accumulated_content = ""
+
+            for event in graph_app.stream(initial_state, config=config):
+                for node_name, node_state in event.items():
+                    logger.debug(f"Streaming event from node: {node_name}")
+
+                    # Check if we have a final answer
+                    if node_state.get("final_answer"):
+                        final_answer = node_state["final_answer"]
+                        print(final_answer, end="", flush=True)
+                        accumulated_content += final_answer
+
+                    # Check for assistant messages with content
+                    elif node_state.get("messages"):
+                        messages = node_state["messages"]
+                        if messages:
+                            last_msg = messages[-1]
+                            if (last_msg.role == Role.ASSISTANT and
+                                hasattr(last_msg, 'content') and last_msg.content):
+
+                                # Print new content progressively
+                                new_content = last_msg.content
+                                if len(new_content) > len(accumulated_content):
+                                    # Print only the new part
+                                    to_print = new_content[len(accumulated_content):]
+                                    print(to_print, end="", flush=True)
+                                    accumulated_content = new_content
+
+            # Ensure we end with a newline
+            if accumulated_content:
+                print()
+
+            # Get final state for logging
+            final_state = graph_app.get_state(config=config)
+            final_state_data = final_state.values
 
             # Update conversation history
-            self.conversation_history = final_state["messages"]
+            if final_state_data.get("messages"):
+                self.conversation_history = final_state_data["messages"]
 
             # Log the conversation
             self.logger.log_turn(
-                route_decision=final_state.get("route_decision"),
-                messages=final_state["messages"],
-                tool_calls_count=final_state["tool_call_count"],
-                ask_cycles_used=final_state.get("ask_cycles_used", 0)
+                route_decision=final_state_data.get("route_decision"),
+                messages=final_state_data.get("messages", []),
+                tool_calls_count=final_state_data.get("tool_call_count", 0),
+                ask_cycles_used=final_state_data.get("ask_cycles_used", 0)
             )
 
         except Exception as e:
             print(f"\n流式输出处理出错: {e}")
             logger.error(f"Error in streaming graph execution: {e}")
+            # Fallback to non-streaming execution
+            try:
+                self._handle_graph_execution(initial_state)
+            except Exception as fallback_error:
+                logger.error(f"Fallback execution also failed: {fallback_error}")
+
+    def _handle_direct_streaming(self, user_input: str):
+        """Handle streaming using direct LLM calls (bypass LangGraph for streaming)."""
+        try:
+            # Use the original AgentCore logic for streaming
+            from agent_core import AgentCore
+
+            agent = AgentCore()
+            streaming_response = agent.process_turn(
+                user_input=user_input,
+                conversation_history=self.conversation_history,
+                stream=True
+            )
+
+            # Process streaming chunks
+            accumulated_content = ""
+            route_decision = None
+            tool_calls_count = 0
+
+            for chunk in streaming_response:
+                if chunk.content:
+                    print(chunk.content, end="", flush=True)
+                    accumulated_content += chunk.content
+
+                if chunk.tool_calls:
+                    tool_calls_count += len(chunk.tool_calls)
+                    # Note: In a full implementation, we'd handle tool calls here
+
+            # Ensure we end with a newline
+            if accumulated_content:
+                print()
+
+            # Create a mock message for conversation history
+            from message_types import Message, Role
+            assistant_message = Message(
+                role=Role.ASSISTANT,
+                content=accumulated_content
+            )
+            self.conversation_history.append(Message(role=Role.USER, content=user_input))
+            self.conversation_history.append(assistant_message)
+
+            # Log the conversation (simplified)
+            # Create a dummy route decision for logging
+            from agent_core import RouteDecision
+            dummy_route_decision = RouteDecision(
+                engine="chat",  # Default to chat for streaming mode
+                reason="Streaming mode - route decision not available",
+                confidence=1.0
+            )
+            self.logger.log_turn(
+                route_decision=dummy_route_decision,
+                messages=self.conversation_history[-2:],  # Just the last turn
+                tool_calls_count=tool_calls_count,
+                ask_cycles_used=0
+            )
+
+        except Exception as e:
+            print(f"\n直接流式输出处理出错: {e}")
+            logger.error(f"Error in direct streaming: {e}")
+            # Fallback to non-streaming
+            initial_state = create_initial_state(user_input)
+            self._handle_graph_execution(initial_state)
 
     def _handle_regular_response(self, result):
         """Handle regular (non-streaming) response."""
