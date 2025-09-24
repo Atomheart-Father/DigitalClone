@@ -394,28 +394,38 @@ class MockClient(LLMClient):
 
             # Handle JSON mode for planner
             if response_format and response_format.get("type") == "json_object":
-                # Return mock JSON plan in the expected format
+                # Return mock JSON plan for competitive analysis
                 response_content = '''{
-  "goal": "制定学习计划",
-  "success_criteria": "掌握编程和数学基础，能够独立解决问题",
+  "goal": "进行公司竞品两周调研并制定方案",
+  "success_criteria": "完成竞品技术优势分析，输出可执行的竞争策略建议",
   "todos": [
     {
       "id": "T1",
-      "title": "学习Python基础语法",
-      "why": "编程学习的基础",
+      "title": "调研竞品技术特点",
+      "why": "了解市场主要竞争对手的技术优势",
       "type": "tool",
-      "tool": "calculator",
-      "input": {"expression": "2+3"},
-      "expected_output": "计算结果",
+      "tool": "rag_search",
+      "input": {"query": "AI助手竞品技术分析", "k": 3},
+      "expected_output": "竞品技术特点总结",
       "needs": []
     },
     {
       "id": "T2",
-      "title": "练习数学计算",
-      "why": "加强数学能力",
-      "type": "chat",
+      "title": "分析当前时间",
+      "why": "确定调研的时间节点",
+      "type": "tool",
+      "tool": "datetime",
       "input": {},
-      "expected_output": "学习建议",
+      "expected_output": "当前日期时间",
+      "needs": []
+    },
+    {
+      "id": "T3",
+      "title": "制定竞争策略",
+      "why": "基于调研结果制定应对策略",
+      "type": "reason",
+      "input": {},
+      "expected_output": "竞争策略建议",
       "needs": []
     }
   ]

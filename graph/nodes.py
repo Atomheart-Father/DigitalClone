@@ -771,7 +771,11 @@ def todo_dispatch_node(state: AgentState) -> Dict[str, Any]:
         return state
 
     # Get current todo
-    current_idx = state.get("current_todo", 0)
+    current_idx = state.get("current_todo")
+    if current_idx is None:
+        current_idx = 0
+        state["current_todo"] = 0
+
     if current_idx >= len(state["plan"]):
         # All todos completed
         state["should_end"] = True
