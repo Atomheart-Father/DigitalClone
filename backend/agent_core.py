@@ -39,7 +39,9 @@ class AgentRouter:
     COMPLEX_KEYWORDS = {
         '计划', '规划', '制定', '分解', '多步骤', '调研', '写方案', '评估', '对比',
         '流程', '依赖', '里程碑', 'roadmap', 'strategy', 'systematic',
-        'complex', 'comprehensive', 'detailed', 'step-by-step', 'breakdown'
+        'complex', 'comprehensive', 'detailed', 'step-by-step', 'breakdown',
+        '分析', '总结', '报告', '查找', '搜索', '研究', '调查', '整理',
+        '综合', '整合', '比较', '评估', '撰写', '生成', '创建'
     }
 
     # Patterns that indicate structured/complex tasks
@@ -140,7 +142,10 @@ class AgentRouter:
         tool_categories = {
             'math': ['计算', '算', '数学'],
             'time': ['时间', '日期', '几号', '现在'],
-            'search': ['搜索', '查找', '查询']
+            'search': ['搜索', '查找', '查询', '网上', '网络'],
+            'file': ['文件', '文档', '读取', '打开', '查看'],
+            'write': ['写', '生成', '创建', '保存', '报告', '总结'],
+            'web': ['网页', '网站', '链接', '访问']
         }
 
         # Count how many different tool categories are mentioned
@@ -149,7 +154,7 @@ class AgentRouter:
             if any(keyword in text for keyword in keywords):
                 mentioned_categories.add(category)
 
-        # Route to reasoner only if multiple different tool categories are needed
+        # Route to reasoner if 2+ different tool categories are needed
         return len(mentioned_categories) >= 2
 
     def route_with_reasoner_confirmation(

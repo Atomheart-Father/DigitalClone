@@ -260,46 +260,28 @@ class CLIApp:
             # Create initial state
             initial_state = create_initial_state(user_input)
 
-            # Quick route classification for streaming mode
-            if self.stream:
-                # Check if it's a complex planning task for streaming mode
-                user_lower = user_input.lower()
-                is_complex_planning = any(keyword in user_lower for keyword in [
-                    '计划', '规划', '制定', '多步骤', '调研', '方案', '评估',
-                    '对比', '流程', '依赖', '阶段', '项目', '任务分解'
-                ]) or len(user_input) > 100  # Lower threshold for streaming
+            # Use full routing logic to determine execution mode
+            from agent_core import AgentRouter
+            from message_types import ConversationContext
 
-                if is_complex_planning:
-                    # Use planner graph for complex planning tasks
-                    from agent_core import RouteDecision
-                    dummy_route_decision = RouteDecision(
-                        engine="reasoner",
-                        reason="Complex planning task - using planner graph",
-                        confidence=1.0
-                    )
-                    self._handle_planner_execution(user_input, dummy_route_decision)
-                else:
-                    # Use direct streaming for simple tasks
-                    self._handle_direct_streaming(user_input)
+            router = AgentRouter()
+            context = ConversationContext(
+                conversation_history=self.conversation_history,
+                current_tools=[],
+                user_preferences={}
+            )
+            route_decision = router.route(user_input, context)
+
+            # For complex tasks (reasoner), always use planner graph
+            if route_decision.engine == "reasoner":
+                if self.stream:
+                    print(" (检测到复杂任务，使用规划模式)")
+                self._handle_planner_execution(user_input, route_decision)
             else:
-                # Check if it's a complex planning task for non-streaming mode
-                user_lower = user_input.lower()
-                is_complex_planning = any(keyword in user_lower for keyword in [
-                    '计划', '规划', '制定', '多步骤', '调研', '方案', '评估',
-                    '对比', '流程', '依赖', '阶段', '项目', '任务分解'
-                ]) or len(user_input) > 150  # Higher threshold for non-streaming
-
-                if is_complex_planning:
-                    # Use planner graph for complex tasks in non-streaming mode
-                    from agent_core import RouteDecision
-                    dummy_route_decision = RouteDecision(
-                        engine="reasoner",
-                        reason="Complex planning task - using planner graph",
-                        confidence=1.0
-                    )
-                    self._handle_planner_execution(user_input, dummy_route_decision)
+                # For simple tasks (chat), use streaming if enabled, otherwise regular graph
+                if self.stream:
+                    self._handle_direct_streaming(user_input)
                 else:
-                    # Handle regular graph execution
                     self._handle_graph_execution(initial_state)
 
         except Exception as e:
