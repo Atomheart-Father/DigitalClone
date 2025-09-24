@@ -6,17 +6,19 @@ This module builds and configures the execution graph using LangGraph.
 
 import logging
 import sys
-import os
 from typing import Dict, Any
+from pathlib import Path
 
-# Add current directory to path for relative imports
-sys.path.append(os.path.dirname(__file__))
+# Add the project root to Python path for proper imports
+project_root = Path(__file__).parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
 from langgraph.graph import StateGraph, END
 from langgraph.checkpoint.memory import MemorySaver
 
-from state import AgentState
-from nodes import (
+from .state import AgentState
+from .nodes import (
     user_input_node,
     decide_route_node,
     model_call_node,
@@ -25,7 +27,7 @@ from nodes import (
     ask_user_interrupt_node,
     end_node
 )
-from edges import (
+from .edges import (
     route_after_decision,
     route_after_model_call,
     route_after_tool_exec,

@@ -14,7 +14,11 @@ from typing import Dict, Any, List, Optional
 
 import jsonschema
 
-from message_types import ToolMeta, ToolExecutionResult
+# Conditional imports to support both relative and absolute imports
+try:
+    from .message_types import ToolMeta, ToolExecutionResult
+except ImportError:
+    from message_types import ToolMeta, ToolExecutionResult
 
 logger = logging.getLogger(__name__)
 

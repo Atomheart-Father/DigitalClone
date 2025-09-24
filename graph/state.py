@@ -8,9 +8,18 @@ from typing import List, Optional, Dict, Any, TypedDict
 from enum import Enum
 
 import sys
-import os
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'backend'))
-from message_types import Message, RouteDecision
+from pathlib import Path
+
+# Add the project root to Python path for proper imports
+project_root = Path(__file__).parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+# Conditional imports to support both relative and absolute imports
+try:
+    from backend.message_types import Message, RouteDecision
+except ImportError:
+    from message_types import Message, RouteDecision
 
 
 class Route(str, Enum):
@@ -66,7 +75,11 @@ def create_initial_state(user_input: str, session_id: Optional[str] = None) -> A
     Returns:
         Initial AgentState
     """
-    from ..backend.message_types import Message, Role
+    # Import Message and Role with conditional imports
+    try:
+        from backend.message_types import Message, Role
+    except ImportError:
+        from message_types import Message, Role
 
     initial_message = Message(
         role=Role.USER,

@@ -8,7 +8,11 @@ from the tool registry for use in LLM prompts and API calls.
 import json
 from typing import Dict, Any, List
 
-from tool_registry import registry
+# Conditional imports to support both relative and absolute imports
+try:
+    from .tool_registry import registry
+except ImportError:
+    from tool_registry import registry
 
 
 def build_tool_prompts() -> Dict[str, Any]:

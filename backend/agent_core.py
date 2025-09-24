@@ -9,13 +9,23 @@ import re
 import logging
 from typing import List, Dict, Any, Optional, Union, Generator
 
-from config import config
-from message_types import (
-    Message, Role, RouteDecision, ConversationContext,
-    LLMResponse, StreamingChunk, ToolCall, ToolExecutionResult
-)
-from llm_interface import create_llm_client
-from tool_registry import registry
+# Conditional imports to support both relative and absolute imports
+try:
+    from .config import config
+    from .message_types import (
+        Message, Role, RouteDecision, ConversationContext,
+        LLMResponse, StreamingChunk, ToolCall, ToolExecutionResult
+    )
+    from .llm_interface import create_llm_client
+    from .tool_registry import registry
+except ImportError:
+    from config import config
+    from message_types import (
+        Message, Role, RouteDecision, ConversationContext,
+        LLMResponse, StreamingChunk, ToolCall, ToolExecutionResult
+    )
+    from llm_interface import create_llm_client
+    from tool_registry import registry
 
 logger = logging.getLogger(__name__)
 

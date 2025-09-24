@@ -8,9 +8,14 @@ the flow between nodes in the execution graph.
 from typing import Literal
 
 import sys
-import os
-sys.path.append(os.path.dirname(__file__))
-from state import AgentState, Route
+from pathlib import Path
+
+# Add the project root to Python path for proper imports
+project_root = Path(__file__).parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
+
+from .state import AgentState, Route
 
 
 def route_after_decision(state: AgentState) -> Literal["model_call", "end"]:

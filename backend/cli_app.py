@@ -14,9 +14,18 @@ from typing import List, Optional
 import config
 import message_types
 import logger
-from tool_prompt_builder import load_system_prompt
-from graph import graph_app
-from graph.state import create_initial_state
+
+# Import graph modules with proper error handling
+try:
+    from graph import graph_app
+    from graph.state import create_initial_state
+    from tool_prompt_builder import load_system_prompt
+    GRAPH_AVAILABLE = True
+except ImportError as e:
+    logger.logger.warning(f"Graph modules not available: {e}")
+    GRAPH_AVAILABLE = False
+    # Fallback imports for compatibility
+    from tool_prompt_builder import load_system_prompt
 
 # 为了兼容性，创建别名
 config = config.config
@@ -210,6 +219,11 @@ class CLIApp:
             print("正在思考...", end="", flush=True)
 
         try:
+            if not GRAPH_AVAILABLE:
+                print(f"\rLangGraph功能暂时不可用，请稍后重试。")
+                logger.error("LangGraph not available - import failed during initialization")
+                return
+
             # Create initial state
             initial_state = create_initial_state(user_input)
 
@@ -227,6 +241,9 @@ class CLIApp:
         except Exception as e:
             print(f"\r处理请求时出错: {e}")
             logger.error(f"Error in conversation turn: {e}")
+            # Uncomment for debugging
+            # import traceback
+            # traceback.print_exc()
 
     def _handle_graph_execution(self, initial_state):
         """Handle regular graph execution."""

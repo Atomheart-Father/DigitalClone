@@ -13,8 +13,13 @@ from typing import List, Dict, Any, Optional, Generator, Union
 
 import requests
 
-from config import config
-from message_types import Message, LLMResponse, StreamingChunk, ToolCall, Role
+# Conditional imports to support both relative and absolute imports
+try:
+    from .config import config
+    from .message_types import Message, LLMResponse, StreamingChunk, ToolCall, Role
+except ImportError:
+    from config import config
+    from message_types import Message, LLMResponse, StreamingChunk, ToolCall, Role
 
 logger = logging.getLogger(__name__)
 

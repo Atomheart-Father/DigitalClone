@@ -9,17 +9,32 @@ from typing import Dict, Any, List
 
 import sys
 import os
-sys.path.append(os.path.join(os.path.dirname(__file__), '..', 'backend'))
+from pathlib import Path
+
+# Add the project root to Python path for proper imports
+project_root = Path(__file__).parent.parent
+if str(project_root) not in sys.path:
+    sys.path.insert(0, str(project_root))
 
 from langchain_core.messages import HumanMessage, AIMessage, ToolMessage
 
-from state import AgentState, Route
-from message_types import Message, Role, RouteDecision, ToolCall
-from agent_core import AgentRouter
-from llm_interface import create_llm_client
-from tool_registry import registry
-from tool_prompt_builder import build_tool_prompts
-from config import config
+from .state import AgentState, Route
+# Conditional imports to support both relative and absolute imports
+try:
+    from backend.message_types import Message, Role, RouteDecision, ToolCall
+    from backend.agent_core import AgentRouter
+    from backend.llm_interface import create_llm_client
+    from backend.tool_registry import registry
+    from backend.tool_prompt_builder import build_tool_prompts
+    from backend.config import config
+except ImportError:
+    # Fallback to relative imports if absolute imports fail
+    from message_types import Message, Role, RouteDecision, ToolCall
+    from agent_core import AgentRouter
+    from llm_interface import create_llm_client
+    from tool_registry import registry
+    from tool_prompt_builder import build_tool_prompts
+    from config import config
 
 logger = logging.getLogger(__name__)
 

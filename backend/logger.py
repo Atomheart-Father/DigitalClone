@@ -11,8 +11,13 @@ from datetime import datetime
 from pathlib import Path
 from typing import Dict, Any, List, Optional
 
-from config import config
-from message_types import Message, RouteDecision
+# Conditional imports to support both relative and absolute imports
+try:
+    from .config import config
+    from .message_types import Message, RouteDecision
+except ImportError:
+    from config import config
+    from message_types import Message, RouteDecision
 
 logger = logging.getLogger(__name__)
 

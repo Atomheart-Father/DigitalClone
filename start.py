@@ -8,7 +8,7 @@
 import sys
 import os
 
-# 添加项目根目录到Python路径（用于graph模块导入backend）
+# 添加项目根目录到Python路径
 project_root = os.path.dirname(__file__)
 sys.path.insert(0, project_root)
 
@@ -17,7 +17,13 @@ backend_dir = os.path.join(project_root, 'backend')
 sys.path.insert(0, backend_dir)
 
 # 现在可以安全导入我们的模块
-from cli_app import main
+try:
+    from cli_app import main
+except ImportError as e:
+    print(f"Import error: {e}")
+    import traceback
+    traceback.print_exc()
+    exit(1)
 
 if __name__ == "__main__":
     main()
