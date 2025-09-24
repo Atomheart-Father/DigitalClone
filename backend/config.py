@@ -57,6 +57,17 @@ class Config:
     REFLECTIVE_REPLANNING_MIN_INFO_SIZE: int = int(os.getenv("REFLECTIVE_REPLANNING_MIN_INFO_SIZE", "1000"))  # Minimum chars of new info to trigger reflection (chars)
     REFLECTIVE_REPLANNING_MAX_TOKENS: int = int(os.getenv("REFLECTIVE_REPLANNING_MAX_TOKENS", "200"))  # Max tokens for compressed context
 
+    # Context Management
+    WORKING_BUFFER_MAX_TOKENS: int = int(os.getenv("WORKING_BUFFER_MAX_TOKENS", "4000"))  # Working buffer token limit
+    WORKING_BUFFER_MAX_TURNS: int = int(os.getenv("WORKING_BUFFER_MAX_TURNS", "20"))  # Working buffer turn limit
+    ROLLING_SUMMARY_MAX_TOKENS: int = int(os.getenv("ROLLING_SUMMARY_MAX_TOKENS", "800"))  # Rolling summary token limit
+    RAG_STORE_MAX_CHUNKS: int = int(os.getenv("RAG_STORE_MAX_CHUNKS", "1000"))  # RAG store chunk limit
+    CONTEXT_ASSEMBLY_TOTAL_BUDGET: int = int(os.getenv("CONTEXT_ASSEMBLY_TOTAL_BUDGET", "8000"))  # Total context budget (tokens)
+
+    # Micro-Decision Settings
+    MICRO_DECISION_MAX_TOKENS: int = int(os.getenv("MICRO_DECISION_MAX_TOKENS", "200"))  # Micro-decision token limit
+    MICRO_DECISION_TIMEOUT: int = int(os.getenv("MICRO_DECISION_TIMEOUT", "30"))  # Micro-decision timeout (seconds)
+
     @classmethod
     def ensure_log_directory(cls) -> Path:
         """Ensure the log directory exists and return its path."""
