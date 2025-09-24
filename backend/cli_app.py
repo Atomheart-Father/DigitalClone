@@ -193,7 +193,8 @@ class CLIApp:
 
     def _show_tools(self):
         """Show available tools."""
-        tools = agent.router.registry.list_tools()
+        from tool_registry import registry
+        tools = registry.list_tools()
         if not tools:
             print("暂无可用工具")
             return
@@ -202,9 +203,14 @@ class CLIApp:
         for tool in tools:
             print(f"  • {tool.name}: {tool.description}")
             # Show parameters if available
-            if tool.parameters.get('properties'):
+            if hasattr(tool, 'parameters') and tool.parameters.get('properties'):
                 params = list(tool.parameters['properties'].keys())
                 print(f"    参数: {', '.join(params)}")
+            # Show executor info
+            if hasattr(tool, 'executor_default'):
+                print(f"    执行者: {tool.executor_default}")
+            if hasattr(tool, 'complexity'):
+                print(f"    复杂度: {tool.complexity}")
 
     def _show_history(self):
         """Show conversation history."""
@@ -422,9 +428,10 @@ class CLIApp:
                         tool_calls_count += 1
 
                         # Execute tool immediately
-                        logger.info(f"Executing streaming tool call: {tool_call.name}")
+                        print(f"[执行工具: {tool_call.name}]", end="", flush=True)
                         try:
-                            tool_result = agent.registry.execute(tool_call.name, **tool_call.arguments)
+                            from tool_registry import registry
+                            tool_result = registry.execute(tool_call.name, **tool_call.arguments)
 
                             # Create tool result message
                             tool_message = Message(
