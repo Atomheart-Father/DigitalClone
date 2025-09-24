@@ -253,8 +253,9 @@ class CLIApp:
                     ]) or len(user_input) > 100
 
                     if is_planning:
-                        # Use planner for complex tasks
-                        self._handle_planner_execution(user_input, route_decision)
+                        # For now, use direct streaming for planning tasks in streaming mode
+                        # TODO: Implement true streaming for planner graph
+                        self._handle_direct_streaming(user_input)
                     else:
                         # Use direct streaming for simple reasoner tasks
                         self._handle_direct_streaming(user_input)
@@ -262,8 +263,25 @@ class CLIApp:
                     # Use direct streaming for chat tasks
                     self._handle_direct_streaming(user_input)
             else:
-                # Handle regular graph execution
-                self._handle_graph_execution(initial_state)
+                # Check if it's a complex planning task for non-streaming mode
+                user_lower = user_input.lower()
+                is_complex_planning = any(keyword in user_lower for keyword in [
+                    '计划', '规划', '制定', '多步骤', '调研', '方案', '评估',
+                    '对比', '流程', '依赖', '阶段', '项目', '任务分解'
+                ]) or len(user_input) > 150  # Higher threshold for non-streaming
+
+                if is_complex_planning:
+                    # Use planner graph for complex tasks in non-streaming mode
+                    from agent_core import RouteDecision
+                    dummy_route_decision = RouteDecision(
+                        engine="reasoner",
+                        reason="Complex planning task - using planner graph",
+                        confidence=1.0
+                    )
+                    self._handle_planner_execution(user_input, dummy_route_decision)
+                else:
+                    # Handle regular graph execution
+                    self._handle_graph_execution(initial_state)
 
         except Exception as e:
             print(f"\r处理请求时出错: {e}")
