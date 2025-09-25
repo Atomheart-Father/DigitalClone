@@ -224,10 +224,13 @@ def create_planner_graph():
     # Add memory checkpointer for persistence
     checkpointer = MemorySaver()
 
-    # Compile the graph
-    app = graph.compile(checkpointer=checkpointer)
+    # Compile the graph with interrupt before planner_generate to handle user input
+    app = graph.compile(
+        checkpointer=checkpointer,
+        interrupt_before=["planner_generate"]  # Interrupt before planner_generate for user input
+    )
 
-    logger.info("Planner LangGraph compiled successfully with memory checkpointer")
+    logger.info("Planner LangGraph compiled successfully with memory checkpointer and interrupt")
 
     return app
 

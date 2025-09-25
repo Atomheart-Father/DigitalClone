@@ -502,58 +502,26 @@ class CLIApp:
             start_time = time.time()
             logger.info("Starting planner execution...")
 
-            # Use stream mode to monitor progress and prevent blocking
+            # Use LangGraph interrupt mechanism for user input handling
             final_state = None
             try:
-                # Try streaming mode first for better monitoring
+                # Stream with automatic interrupt handling for user input
                 accumulated_state = initial_state.copy()
                 for event in planner_app.stream(initial_state, config=config):
-                    for node_name, node_state in event.items():
-                        accumulated_state.update(node_state)
+                    # Handle LangGraph interrupts (user input required)
+                    if "__interrupt__" in event:
+                        interrupt_info = event["__interrupt__"]
+                        logger.info("🎯 GRAPH INTERRUPT DETECTED - User input required")
 
-                        # Check for planner generation completion and user input requirements
-                        if node_name == "planner_generate":
-                            if node_state.get("plan"):
-                                logger.info(f"Planner generated {len(node_state['plan'])} todos")
-                            if node_state.get("needs_user_input"):
-                                logger.info("🛑 DETECTED USER INPUT REQUIREMENT FROM PLANNER - Blocking for user input")
-                                needs_info = node_state["needs_user_input"]
-                                prompt = f"需要为 '{needs_info.get('todo_title', '任务')}' 提供参数: {', '.join(needs_info.get('needs', []))}"
+                        # Get the state at interrupt point
+                        interrupted_state = interrupt_info[0] if isinstance(interrupt_info, list) else interrupt_info
 
-                                print(f"\n\033[33m[USER INPUT REQUIRED]\033[0m {prompt}")
-                                try:
-                                    import select
-                                    import sys
-
-                                    print("> ", end="", flush=True)
-                                    ready, _, _ = select.select([sys.stdin], [], [], 120.0)
-
-                                    if ready:
-                                        user_text = input().strip()
-                                    else:
-                                        print("\n输入超时，使用默认值继续...")
-                                        user_text = ""
-
-                                except (EOFError, KeyboardInterrupt):
-                                    print("\n操作取消")
-                                    user_text = ""
-
-                                # 将输入写回状态
-                                accumulated_state["user_provided_input"] = {param: user_text for param in needs_info.get('needs', [])}
-                                accumulated_state["needs_info"] = needs_info
-
-                                logger.info("✅ User input collected from planner, continuing with streaming execution")
-                                continue
-
-                        # 🔴 关键：捕捉 ask_user_interrupt 中断并阻塞等待输入
-                        if node_name == "ask_user_interrupt" and node_state.get("needs_user_input"):
-                            logger.info("🛑 DETECTED USER INPUT REQUIREMENT - Blocking for user input")
-                            needs_info = node_state["needs_user_input"]
+                        if interrupted_state.get("needs_user_input"):
+                            needs_info = interrupted_state["needs_user_input"]
                             prompt = f"需要为 '{needs_info.get('todo_title', '任务')}' 提供参数: {', '.join(needs_info.get('needs', []))}"
 
                             print(f"\n\033[33m[USER INPUT REQUIRED]\033[0m {prompt}")
                             try:
-                                # 阻塞等待用户输入，最多等待120秒
                                 import select
                                 import sys
 
@@ -564,29 +532,51 @@ class CLIApp:
                                     user_text = input().strip()
                                 else:
                                     print("\n输入超时，使用默认值继续...")
-                                    user_text = ""  # 超时降级
+                                    user_text = ""
 
                             except (EOFError, KeyboardInterrupt):
                                 print("\n操作取消")
                                 user_text = ""
 
-                            # 将输入写回状态 - graph的ask_user_interrupt_node会处理这些数据
-                            accumulated_state["user_provided_input"] = {param: user_text for param in needs_info.get('needs', [])}
-                            accumulated_state["needs_info"] = needs_info
+                            # Resume graph execution with user input
+                            user_input = {param: user_text for param in needs_info.get('needs', [])}
+                            resume_state = interrupted_state.copy()
+                            resume_state.update({
+                                "user_provided_input": user_input,
+                                "needs_info": needs_info
+                            })
 
-                            logger.info("✅ User input collected, continuing with streaming execution")
-                            # 不要重新invoke，继续streaming loop让graph自然继续执行
-                            continue
+                            logger.info("✅ User input collected, resuming graph execution")
+
+                            # Resume from interrupt point
+                            for resume_event in planner_app.stream(resume_state, config=config):
+                                for node_name, node_state in resume_event.items():
+                                    accumulated_state.update(node_state)
+
+                                    # Check for completion
+                                    if node_state.get("should_end") or node_state.get("final_answer"):
+                                        final_state = accumulated_state.copy()
+                                        break
+                                else:
+                                    continue
+                                break
+                            break
+
+                    # Normal event processing
+                    for node_name, node_state in event.items():
+                        accumulated_state.update(node_state)
+
+                        # Log progress
+                        if node_name == "planner_generate" and node_state.get("plan"):
+                            logger.info(f"Planner generated {len(node_state['plan'])} todos")
 
                         # Check for completion
                         if node_state.get("should_end") or node_state.get("final_answer"):
                             final_state = accumulated_state.copy()
-                            # Ensure needs_user_input is included in final state
-                            if node_state.get("needs_user_input"):
-                                final_state["needs_user_input"] = node_state["needs_user_input"]
-                                # Save state for continuation if user input is needed
-                                self.last_planner_state = final_state.copy()
                             break
+                    else:
+                        continue
+                    break
 
                     # Safety timeout check (5 minutes max)
                     if time.time() - start_time > 300:
