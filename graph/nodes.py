@@ -339,6 +339,14 @@ def ask_user_interrupt_node(state: AgentState) -> Dict[str, Any]:
     """
     logger.info("👤 ASK USER INTERRUPT - Processing user parameter input")
 
+    # Check if we still need user input (CLI hasn't provided it yet)
+    if state.get("needs_user_input"):
+        logger.info("⏳ STILL NEED USER INPUT - This node should not be called before CLI input")
+        # If CLI hasn't provided input yet, we should not proceed
+        # Keep the needs_user_input flag so CLI can detect and block
+        state["awaiting_user"] = True
+        return state
+
     # Handle new AskUser mechanism from planning phase
     if state.get("user_provided_input") and state.get("needs_info"):
         user_input = state["user_provided_input"]
@@ -364,9 +372,6 @@ def ask_user_interrupt_node(state: AgentState) -> Dict[str, Any]:
         state.pop("user_provided_input", None)
         state.pop("needs_info", None)
 
-        # Clear needs_user_input flag to prevent further blocking
-        state.pop("needs_user_input", None)
-
         # Let graph routing handle the next step - will go to todo_dispatch
         logger.info("▶️ RESUMING planner execution with user parameters and activated plan")
 
@@ -381,7 +386,6 @@ def ask_user_interrupt_node(state: AgentState) -> Dict[str, Any]:
     # Clear all user interaction state
     state["awaiting_user"] = False
     state["user_input_buffer"] = None
-    state.pop("needs_user_input", None)  # Clear the blocking flag
 
     logger.info("🧹 Cleared user interaction state - execution resuming")
 

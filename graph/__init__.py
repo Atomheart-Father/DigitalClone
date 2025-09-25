@@ -174,10 +174,10 @@ def build_planner_graph() -> StateGraph:
     # After reflective replanning - continue with dispatch
     graph.add_edge("reflective_replanning", "todo_dispatch")
 
-    # After user clarification - check if we need to resume a tool call
+    # After user clarification - check if we still need user input or need to resume a tool call
     graph.add_conditional_edges(
         "ask_user_interrupt",
-        lambda state: "tool_exec" if state.get("pending_tool_call") else "todo_dispatch"
+        lambda state: "ask_user_interrupt" if state.get("needs_user_input") else ("tool_exec" if state.get("pending_tool_call") else "todo_dispatch")
     )
 
     # Loop back for next todo
