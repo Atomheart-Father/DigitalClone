@@ -147,10 +147,10 @@ def build_planner_graph() -> StateGraph:
     )
     graph.add_edge("sufficiency_check", "planner_generate")
 
-    # Conditional edge from planner_generate - check if user input is needed
+    # Conditional edge from planner_generate - check if user input is needed or plan is ready
     graph.add_conditional_edges(
         "planner_generate",
-        lambda state: "ask_user_interrupt" if state.get("needs_user_input") else "planner_gate"
+        lambda state: "planner_generate" if state.get("needs_user_input") or state.get("_pending_plan_data") else "planner_gate"
     )
 
     # Conditional edges from planner_gate

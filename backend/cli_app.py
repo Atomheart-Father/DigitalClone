@@ -511,9 +511,39 @@ class CLIApp:
                     for node_name, node_state in event.items():
                         accumulated_state.update(node_state)
 
-                        # Check for planner generation completion
-                        if node_name == "planner_generate" and node_state.get("plan"):
-                            logger.info(f"Planner generated {len(node_state['plan'])} todos")
+                        # Check for planner generation completion and user input requirements
+                        if node_name == "planner_generate":
+                            if node_state.get("plan"):
+                                logger.info(f"Planner generated {len(node_state['plan'])} todos")
+                            if node_state.get("needs_user_input"):
+                                logger.info("🛑 DETECTED USER INPUT REQUIREMENT FROM PLANNER - Blocking for user input")
+                                needs_info = node_state["needs_user_input"]
+                                prompt = f"需要为 '{needs_info.get('todo_title', '任务')}' 提供参数: {', '.join(needs_info.get('needs', []))}"
+
+                                print(f"\n\033[33m[USER INPUT REQUIRED]\033[0m {prompt}")
+                                try:
+                                    import select
+                                    import sys
+
+                                    print("> ", end="", flush=True)
+                                    ready, _, _ = select.select([sys.stdin], [], [], 120.0)
+
+                                    if ready:
+                                        user_text = input().strip()
+                                    else:
+                                        print("\n输入超时，使用默认值继续...")
+                                        user_text = ""
+
+                                except (EOFError, KeyboardInterrupt):
+                                    print("\n操作取消")
+                                    user_text = ""
+
+                                # 将输入写回状态
+                                accumulated_state["user_provided_input"] = {param: user_text for param in needs_info.get('needs', [])}
+                                accumulated_state["needs_info"] = needs_info
+
+                                logger.info("✅ User input collected from planner, continuing with streaming execution")
+                                continue
 
                         # 🔴 关键：捕捉 ask_user_interrupt 中断并阻塞等待输入
                         if node_name == "ask_user_interrupt" and node_state.get("needs_user_input"):

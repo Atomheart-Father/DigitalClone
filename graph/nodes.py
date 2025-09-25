@@ -636,50 +636,33 @@ def planner_generate_node(state: AgentState) -> Dict[str, Any]:
                     "todos": plan_data.get("todos", [])
                 }
             }
-            # 设置状态以触发ask_user_interrupt
-            state["current_node"] = "ask_user_interrupt"
-            state["execution_path"].append("planner_generate")
             logger.info(f"🛑 BLOCKING FOR USER INPUT: {ask_user_info.get('missing_params', [])}")
 
-            # 重要：即使需要用户输入，也要先生成plan，让ask_user_interrupt完成后能够继续执行
-            # 转换JSON计划为TodoItem对象（但暂时不设置到state["plan"]，等用户输入后再设置）
-            todos = []
-            for todo_data in plan_data.get("todos", []):
-                # 验证工具是否在白名单中
-                tool_name = todo_data.get("tool")
-                if tool_name:
-                    from backend.tool_prompt_builder import get_allowed_tools_whitelist
-                    allowed_tools = get_allowed_tools_whitelist()
-                    if tool_name not in allowed_tools:
-                        logger.warning(f"⚠️ 工具 '{tool_name}' 不在白名单中，跳过此任务")
-                        continue
-
-                # 验证必需字段
-                required_fields = ["id", "tool", "params", "depends_on", "why", "cost"]
-                if not all(field in todo_data for field in required_fields):
-                    logger.warning(f"⚠️ 任务缺少必需字段: {todo_data.get('id', 'unknown')}")
-                    continue
-
-                todos.append(TodoItem(
-                    id=todo_data["id"],
-                    title=todo_data.get("title", f"执行{tool_name}"),
-                    why=todo_data["why"],
-                    type=TodoType.TOOL,
-                    tool=tool_name,
-                    executor="chat",  # 默认chat，之后可优化
-                    input_data=todo_data["params"],
-                    dependencies=todo_data["depends_on"],
-                    parallel_group=None,  # 暂时不支持并行
-                    execution_order=0,    # 暂时不支持并行
-                    expected_output=todo_data.get("expected_output", ""),
-                    needs=[]  # Phase 3中needs应为空，由ask_user处理
-                ))
-
-            # 临时存储plan，等待用户输入完成后设置
-            state["_pending_plan"] = todos
-            state["execution_strategy"] = plan_data.get("strategy", "serial")
+            # 临时存储完整的plan数据，等待用户输入完成后处理
+            state["_pending_plan_data"] = plan_data
 
             return state
+
+        # 检查是否有待处理的plan数据（来自之前的阻塞）
+        if state.get("_pending_plan_data") and state.get("user_provided_input"):
+            logger.info("📝 PROCESSING PENDING PLAN WITH USER INPUT")
+            plan_data = state["_pending_plan_data"]
+
+            # 处理用户输入，更新plan中的参数
+            user_input = state["user_provided_input"]
+            needs_info = state.get("needs_info", {})
+
+            # 更新plan中的参数
+            for todo_data in plan_data.get("todos", []):
+                for param_name, param_value in user_input.items():
+                    if param_name in todo_data.get("params", {}):
+                        todo_data["params"][param_name] = param_value
+                        logger.info(f"✅ Updated parameter {param_name} = {param_value}")
+
+            # 清除临时状态
+            state.pop("_pending_plan_data", None)
+            state.pop("user_provided_input", None)
+            state.pop("needs_info", None)
 
         # 正常处理：转换JSON计划为TodoItem对象
         todos = []
