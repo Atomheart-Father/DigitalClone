@@ -656,8 +656,8 @@ def planner_generate_node(state: AgentState) -> Dict[str, Any]:
                     logger.warning(f"⚠️ 任务缺少必需字段: {todo_data.get('id', 'unknown')}")
                     continue
 
-            todos.append(TodoItem(
-                id=todo_data["id"],
+                todos.append(TodoItem(
+                    id=todo_data["id"],
                     title=todo_data.get("title", f"执行{tool_name}"),
                     why=todo_data["why"],
                     type=TodoType.TOOL,
@@ -667,7 +667,7 @@ def planner_generate_node(state: AgentState) -> Dict[str, Any]:
                     dependencies=todo_data["depends_on"],
                     parallel_group=None,  # 暂时不支持并行
                     execution_order=0,    # 暂时不支持并行
-                expected_output=todo_data.get("expected_output", ""),
+                    expected_output=todo_data.get("expected_output", ""),
                     needs=[]  # Phase 3中needs应为空，由ask_user处理
                 ))
 
