@@ -542,7 +542,7 @@ def planner_generate_node(state: AgentState) -> Dict[str, Any]:
                 stream=False
             )
             draft_plan = draft_response.content.strip()
-            logger.info(f"📝 PHASE 1 COMPLETE - Draft ({len(draft_plan)} chars): {draft_plan[:200]}...")
+            logger.info(f"📝 PHASE 1 COMPLETE - Draft ({len(draft_plan)} chars): {draft_plan}")
         except Exception as e:
             logger.warning(f"❌ Phase 1 failed: {e}, using fallback")
             draft_plan = f"分析需求：{user_request[:50]}... 需读取文件、搜索信息、生成报告。"
@@ -782,8 +782,8 @@ def _extract_constraints(request: str) -> str:
 
 def _extract_goal_from_request(request: str) -> str:
     """从请求中提取核心目标。"""
-    # 简化为前50字符
-    return request[:50] if len(request) > 50 else request
+    # 保留完整请求作为目标
+    return request
 
 
 def _extract_key_facts(state: AgentState, draft_plan: str) -> str:
@@ -846,11 +846,11 @@ def _build_context_summary(state: AgentState, draft_plan: str, review_feedback: 
 
     # 添加草稿计划
     if draft_plan:
-        parts.append(f"草稿计划: {draft_plan[:100]}...")
+        parts.append(f"草稿计划: {draft_plan}")
 
     # 添加审阅反馈
     if review_feedback and review_feedback != "保留":
-        parts.append(f"审阅建议: {review_feedback[:50]}...")
+        parts.append(f"审阅建议: {review_feedback}")
 
     # 添加历史上下文
     recent_messages = []
