@@ -1,138 +1,105 @@
-# PR: Sprint 0.5+0.6 Complete - Advanced AI Assistant with Complex Tool Ecosystem
+# 🔧 Fix: Resolve Planner Execution Blocking Issues
 
-## 🎯 Major Deliverables
+## 📋 Problem Summary
 
-### Sprint 0.5 - Complex Tool Ecosystem ✅
-**6 New Production-Grade Tools:**
-- web_search: Internet search with SerpAPI + DuckDuckGo fallback
-- web_read: Web content extraction with BeautifulSoup noise filtering
-- python_exec: Safe Python sandbox with pandas/numpy and timeout protection
-- file_read: Multi-format file reader (txt/md/pdf) with encoding detection  
-- tabular_qa: CSV/Excel analysis with natural language queries
-- markdown_writer: Professional document generation with formatting
+The planner execution was blocking indefinitely when calling DeepSeek reasoner API. Users experienced:
+- Planner generation stuck with no response
+- CLI hanging on complex planning tasks
+- No timeout or error recovery mechanisms
 
-### Sprint 0.6 - Tool-Executor Routing System ✅
-**Intelligent Multi-Tool Orchestration:**
-- Smart Routing: Automatic Chat vs Reasoner model selection based on complexity
-- Planner Graph: Structured task decomposition using LangGraph state machine
-- Two-Step Tool Calling: Proper LLM → tool → LLM feedback loop
-- AskUser Integration: Clarification handling in complex workflows
-- State Management: Execution tracking with recovery mechanisms
+## 🔍 Root Cause Analysis
 
-## 🔧 Technical Architecture
+**Primary Issue**: DeepSeek reasoner returns empty responses when `response_format={"type": "json_object"}` parameter is used.
 
-### Core Systems Implemented:
-1. Tool Registry System: Plugin-based with automatic discovery
-2. Routing Engine: Complexity-based model selection with keyword analysis
-3. Execution Graph: State machine for multi-step task orchestration  
-4. Security Framework: Path restrictions, code sandboxing, timeout controls
+**Evidence**:
+- HTTP requests succeed (200 status) but response body is empty (`content-length: 0`)
+- Simple API calls work normally (6-8s response time)
+- Complex planning prompts trigger empty responses
+- Issue occurs consistently across different prompt formats
 
-### Quality Assurance:
-- 56 Comprehensive Tests: 100% pass rate covering all tools and routing
-- Error Handling: Graceful degradation and user-friendly messages
-- Logging System: Complete execution tracing and debugging
-- Type Safety: Full Pydantic models and JSON schema validation
+## ✅ Solution Implemented
 
-## 📊 Key Metrics
+### 1. LLM Client Fixes (`backend/llm_interface.py`)
+- **Removed problematic `response_format` parameter** that causes empty responses
+- **Added planner-specific timeout handling**: (30s connect, 180s read) for complex reasoning
+- **Enhanced streaming response parsing** with better error handling
+- **Added comprehensive logging** for API call debugging
+- **Optimized streaming log frequency**: Reduced keepalive logs from every occurrence to every 50 occurrences (~98% reduction in log noise)
 
-| Category | Before | After | Improvement |
-|----------|--------|-------|-------------|
-| Available Tools | 4 | 10 | +150% |
-| Test Coverage | ~20 | 56 | +180% |  
-| Task Complexity | Simple Q&A | Complex analysis | 🚀 |
-| Execution Modes | Single calls | Orchestrated workflows | 🚀 |
+### 2. Planner Logic Improvements (`graph/nodes.py`)
+- **Simplified planning prompts** to reduce API rejection risk
+- **Robust JSON parsing** with multiple fallback mechanisms
+- **Fixed `todo_dispatch_node` index advancement** logic
+- **Graceful error handling** when API returns empty responses
 
-## 🎪 Architecture Highlights
+### 3. CLI Monitoring (`backend/cli_app.py`)
+- **Added planner execution heartbeat monitoring**
+- **Implemented timeout protection** (5-minute safety limit)
+- **Stream-based progress tracking** for better visibility
 
-### Plugin-Based Tool System:
-TOOL_META with executor/complexity hints and JSON schema validation
+### 4. Testing Infrastructure (`test_sprint_0_6_complete.py`)
+- **Force real API client usage** in tests to catch integration issues
+- **Enhanced error reporting** with detailed failure analysis
+- **Maintained backward compatibility** with mock client fallback
 
-### Intelligent Routing:
-Complex keyword detection + tool combination analysis → automatic planner mode
+## 🧪 Validation Results
 
-### State Machine Execution:
-classify_intent → planner_generate → todo_dispatch → tool_exec → aggregate_answer
+### ✅ Working Components
+- **Basic API connectivity**: 6-8 second response times
+- **Tool execution**: All 10 tools functional
+- **Routing logic**: AgentRouter working correctly
+- **Error recovery**: System remains stable under API failures
 
-## 🔒 Security & Reliability
+### ⚠️ Known Limitations
+- **DeepSeek API compatibility**: `response_format=json_object` causes empty responses
+- **Complex prompts**: May need further optimization for production use
+- **Fallback behavior**: Empty plans result in generic completion messages
 
-- Path Security: File operations restricted to project directories
-- Code Sandboxing: Python execution isolated with timeout protection
-- API Resilience: Multiple fallback mechanisms for external services
-- Input Validation: Comprehensive parameter validation with clear errors
-- Resource Limits: Memory, time, and output size restrictions
+## 📊 Technical Details
 
-## 🚀 User Experience Evolution
-
-**Before:** "计算2+3" → "5"
-**After:** "分析AI趋势报告，查找最新信息，写总结" → 完整的规划执行流程
-
-New Capabilities:
-- Multi-step task planning and execution
-- Web research and content analysis
-- File processing and data manipulation  
-- Professional report generation
-- Interactive clarification handling
-
-## 📁 Files Changed Summary
-
-### New Tools (6 files):
-- backend/tools/tool_web_search.py
-- backend/tools/tool_web_read.py
-- backend/tools/tool_python_exec.py
-- backend/tools/tool_file_read.py
-- backend/tools/tool_tabular_qa.py
-- backend/tools/tool_markdown_writer.py
-
-### Core Systems (10+ files):
-- backend/agent_core.py - Enhanced routing logic
-- backend/cli_app.py - Graph integration and routing
-- graph/nodes.py - Planner execution nodes
-- graph/state.py - Execution state management
-- backend/tool_registry.py - Tool metadata system
-- backend/tool_prompt_builder.py - Dynamic prompt generation
-
-### Testing & Quality (8 files):
-- backend/tests/test_new_tools.py - Comprehensive tool testing
-- backend/ask_user_policy.py - Clarification logic
-- run_tests.py - Test runner script
-
-## 🎯 Impact Assessment
-
-### Functional Impact:
-- ✅ Transforms from simple chatbot to professional AI assistant
-- ✅ Enables complex analytical workflows previously impossible
-- ✅ Supports real-world research and analysis tasks  
-- ✅ Provides enterprise-grade reliability and security
-
-### Technical Impact:
-- ✅ Establishes scalable tool architecture for future expansion
-- ✅ Implements production-ready error handling and monitoring
-- ✅ Creates robust testing framework for quality assurance
-- ✅ Builds foundation for advanced AI orchestration patterns
-
-## 🔄 Next Steps & Future Work
-
-### Immediate Opportunities:
-- Web Tools Integration: Connect web_search + web_read for automated research
-- Data Pipeline: Link tabular_qa + python_exec + markdown_writer for analysis
-- RAG Enhancement: Integrate with existing rag_search/upsert for knowledge management
-
-### Future Expansions:
-- Agent Collaboration: Multi-agent coordination for complex tasks
-- Custom Tool Development: Easy framework for domain-specific tools
-- Workflow Templates: Pre-built execution patterns for common use cases
-
-## 🎉 Conclusion
-
-This implementation successfully transforms DigitalClone from a basic conversational agent into a **professional-grade multi-tool orchestrator** capable of handling complex, real-world analytical tasks with enterprise-level reliability.
-
-**Ready for production deployment and further expansion!** 🚀
-
-**Testing Command:**
+### Before Fix
 ```bash
-cd deepclone-assistant
-python start.py
-# Input: "帮我分析一下桌面上那份AI技术趋势报告，查找最新的相关信息，然后写一份完整的分析总结报告。"
+🤖 Calling planner_generate_node...
+⏱️  API call completed in 195.86s (status: 200)
+📏 Response length: 0 characters
+❌ Empty response causes system hang
 ```
 
-**Expected Result:** Complete planning → file reading → web research → report generation workflow.
+### After Fix
+```bash
+🎯 Using Chat model for planning (Reasoner has empty response issues)
+✅ Chat model JSON parsing successful
+📝 Generated plan with 4 todos
+  - T1: 收集用户学习目标和约束信息 (chat)
+  - T2: 搜索相关学习资源和最佳实践 (tool)
+  - T3: 计算学习时间分配和进度 (tool)
+  - T4: 生成个性化学习计划文档 (write)
+✅ Planning completed successfully in ~8s
+```
+
+## 🔄 Migration Notes
+
+- **No breaking changes** to existing APIs
+- **Enhanced logging** may increase log volume (configurable)
+- **Timeout values** increased for better reliability
+- **Test behavior changed** to use real API (controlled by environment variable)
+
+## 🎯 Next Steps
+
+1. **Monitor DeepSeek API updates** for `response_format` compatibility
+2. **Implement prompt optimization** for complex planning tasks
+3. **Add retry mechanisms** with exponential backoff
+4. **Consider alternative LLM providers** for critical planning workflows
+
+## 📈 Impact Assessment
+
+- **Reliability**: ✅ System no longer hangs on planning tasks
+- **Performance**: ✅ Added reasonable timeouts and monitoring
+- **Maintainability**: ✅ Enhanced error handling and logging
+- **User Experience**: ✅ Graceful degradation instead of infinite waits
+
+---
+
+**Priority**: HIGH - Fixes critical blocking issue
+**Risk**: LOW - Changes are defensive and backward-compatible
+**Testing**: Comprehensive - covers API failures and edge cases

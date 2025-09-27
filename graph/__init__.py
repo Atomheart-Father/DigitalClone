@@ -32,7 +32,10 @@ from .nodes import (
     planner_generate_node,
     planner_gate_node,
     todo_dispatch_node,
-    aggregate_answer_node
+    aggregate_answer_node,
+    # Reflective replanning nodes
+    reflective_replanning_check_node,
+    reflective_replanning_node
 )
 from .edges import (
     route_after_decision,
@@ -132,13 +135,23 @@ def build_planner_graph() -> StateGraph:
     graph.add_node("planner_gate", planner_gate_node)
     graph.add_node("todo_dispatch", todo_dispatch_node)
     graph.add_node("tool_exec", tool_exec_node)
+    graph.add_node("reflective_check", reflective_replanning_check_node)
+    graph.add_node("reflective_replanning", reflective_replanning_node)
     graph.add_node("ask_user_interrupt", ask_user_interrupt_node)
     graph.add_node("aggregate_answer", aggregate_answer_node)
 
     # Add edges for planner pipeline
-    graph.add_edge("classify_intent", "sufficiency_check")
+    graph.add_conditional_edges(
+        "classify_intent",
+        lambda state: "ask_user_interrupt" if state.get("_route_to_ask_user") else "sufficiency_check"
+    )
     graph.add_edge("sufficiency_check", "planner_generate")
-    graph.add_edge("planner_generate", "planner_gate")
+
+    # Conditional edge from planner_generate - check if user input is needed or plan is ready
+    graph.add_conditional_edges(
+        "planner_generate",
+        lambda state: "planner_generate" if state.get("needs_user_input") or state.get("_pending_plan_data") else "planner_gate"
+    )
 
     # Conditional edges from planner_gate
     graph.add_conditional_edges(
@@ -146,16 +159,25 @@ def build_planner_graph() -> StateGraph:
         lambda state: "ask_user_interrupt" if state["sufficiency"] == "missing" else "todo_dispatch"
     )
 
-    # After tool execution or user clarification
+    # After tool execution - check for reflective replanning
     graph.add_conditional_edges(
         "tool_exec",
-        lambda state: "ask_user_interrupt" if state.get("awaiting_user") else "todo_dispatch"
+        lambda state: "ask_user_interrupt" if state.get("awaiting_user") else "reflective_check"
     )
 
-    # After user clarification - check if we need to resume a tool call
+    # After reflective check - decide if replanning is needed
+    graph.add_conditional_edges(
+        "reflective_check",
+        lambda state: "reflective_replanning" if state.get("trigger_reflective_replanning") else "todo_dispatch"
+    )
+
+    # After reflective replanning - continue with dispatch
+    graph.add_edge("reflective_replanning", "todo_dispatch")
+
+    # After user clarification - check if we still need user input or need to resume a tool call
     graph.add_conditional_edges(
         "ask_user_interrupt",
-        lambda state: "tool_exec" if state.get("pending_tool_call") else "todo_dispatch"
+        lambda state: "ask_user_interrupt" if state.get("needs_user_input") else ("tool_exec" if state.get("pending_tool_call") else "todo_dispatch")
     )
 
     # Loop back for next todo
@@ -164,7 +186,7 @@ def build_planner_graph() -> StateGraph:
         lambda state: "tool_exec" if state.get("pending_tool_call") else "aggregate_answer"
     )
 
-    # Set entry point
+    # Set entry point - we'll handle conditional logic in the first node
     graph.set_entry_point("classify_intent")
 
     return graph
@@ -202,10 +224,13 @@ def create_planner_graph():
     # Add memory checkpointer for persistence
     checkpointer = MemorySaver()
 
-    # Compile the graph
-    app = graph.compile(checkpointer=checkpointer)
+    # Compile the graph with interrupt before planner_generate to handle user input
+    app = graph.compile(
+        checkpointer=checkpointer,
+        interrupt_before=["planner_generate"]  # Interrupt before planner_generate for user input
+    )
 
-    logger.info("Planner LangGraph compiled successfully with memory checkpointer")
+    logger.info("Planner LangGraph compiled successfully with memory checkpointer and interrupt")
 
     return app
 

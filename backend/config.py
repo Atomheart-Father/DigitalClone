@@ -36,14 +36,40 @@ class Config:
     MAX_ASK_USER_CYCLES: int = int(os.getenv("MAX_ASK_USER_CYCLES", "2"))
     LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
 
+    # Reasoner Micro-Inference Configuration
+    REASONER_MICRO_CONNECT_TIMEOUT: int = int(os.getenv("REASONER_MICRO_CONNECT_TIMEOUT", "10"))  # Connect timeout for micro-inference
+    REASONER_MICRO_READ_TIMEOUT: int = int(os.getenv("REASONER_MICRO_READ_TIMEOUT", "30"))  # Read timeout for micro-inference
+    REASONER_MICRO_MAX_INPUT_TOKENS: int = int(os.getenv("REASONER_MICRO_MAX_INPUT_TOKENS", "200"))  # Max input tokens for micro-inference
+    REASONER_MICRO_MAX_CANDIDATES: int = int(os.getenv("REASONER_MICRO_MAX_CANDIDATES", "3"))  # Max candidates for micro-inference
+
     # Backward compatibility
     TIMEOUT_SECONDS: int = TIMEOUT_SECONDS_CHAT
 
     # Data Paths
     LOG_DIR: str = os.getenv("LOG_DIR", "data/logs")
+    OUTPUT_DIR: str = os.getenv("OUTPUT_DIR", "data/output")
 
     # Development Settings
     ENABLE_MOCK_CLIENT_IF_NO_KEY: bool = os.getenv("ENABLE_MOCK_CLIENT_IF_NO_KEY", "true").lower() == "true"
+
+    # Advanced Planning Features
+    ENABLE_REFLECTIVE_REPLANNING: bool = os.getenv("ENABLE_REFLECTIVE_REPLANNING", "false").lower() == "true"  # Enable reflective replanning after major information gathering
+    REFLECTIVE_REPLANNING_MIN_INFO_SIZE: int = int(os.getenv("REFLECTIVE_REPLANNING_MIN_INFO_SIZE", "1000"))  # Minimum chars of new info to trigger reflection (chars)
+    REFLECTIVE_REPLANNING_MAX_TOKENS: int = int(os.getenv("REFLECTIVE_REPLANNING_MAX_TOKENS", "200"))  # Max tokens for compressed context
+
+    # Context Management
+    WORKING_BUFFER_MAX_TOKENS: int = int(os.getenv("WORKING_BUFFER_MAX_TOKENS", "4000"))  # Working buffer token limit
+    WORKING_BUFFER_MAX_TURNS: int = int(os.getenv("WORKING_BUFFER_MAX_TURNS", "20"))  # Working buffer turn limit
+    ROLLING_SUMMARY_MAX_TOKENS: int = int(os.getenv("ROLLING_SUMMARY_MAX_TOKENS", "800"))  # Rolling summary token limit
+    RAG_STORE_MAX_CHUNKS: int = int(os.getenv("RAG_STORE_MAX_CHUNKS", "1000"))  # RAG store chunk limit
+    CONTEXT_ASSEMBLY_TOTAL_BUDGET: int = int(os.getenv("CONTEXT_ASSEMBLY_TOTAL_BUDGET", "8000"))  # Total context budget (tokens)
+
+    # Micro-Decision Settings
+    MICRO_DECISION_MAX_TOKENS: int = int(os.getenv("MICRO_DECISION_MAX_TOKENS", "200"))  # Micro-decision token limit
+    MICRO_DECISION_TIMEOUT: int = int(os.getenv("MICRO_DECISION_TIMEOUT", "30"))  # Micro-decision timeout (seconds)
+
+    # Reflective Replanning Limits
+    MAX_REPLANS_PER_TASK: int = int(os.getenv("MAX_REPLANS_PER_TASK", "2"))  # Maximum reflective replans per task
 
     @classmethod
     def ensure_log_directory(cls) -> Path:

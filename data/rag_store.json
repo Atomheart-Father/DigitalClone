@@ -1,0 +1,40 @@
+[
+  {
+    "id": "tool_file_read_0",
+    "content": "这是文件内容，包含重要信息。",
+    "source": "tool_file_read",
+    "chunk_index": 0,
+    "total_chunks": 1,
+    "metadata": {
+      "tool": "file_read",
+      "timestamp": 1758757718.806881,
+      "source_type": "tool_execution"
+    },
+    "fingerprint": "31729aa08fdceecf57850a5956f75aaa2b79f6f1031ffdbd46a63b269f6f62da",
+    "created_at": 1758757718.806886
+  },
+  {
+    "id": "tool_web_search_0",
+    "content": "网络搜索结果：AI技术趋势分析",
+    "source": "tool_web_search",
+    "chunk_index": 0,
+    "total_chunks": 1,
+    "metadata": {
+      "tool": "web_search",
+      "timestamp": 1758757718.8069708,
+      "source_type": "tool_execution"
+    },
+    "fingerprint": "6b871916cc9892738aac33c60c7b0cbbdf103c8671566589e28b83991e2532ff",
+    "created_at": 1758757718.806974
+  },
+  {
+    "id": "doc1_0",
+    "content": "重复的测试内容",
+    "source": "doc1",
+    "chunk_index": 0,
+    "total_chunks": 1,
+    "metadata": {},
+    "fingerprint": "19600d3a3b93b9e6e6e4014010492be3d8f72ababd9fb5b13e679f98e8cc3cb3",
+    "created_at": 1758757718.80723
+  }
+]

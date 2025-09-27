@@ -55,6 +55,9 @@ class TodoItem:
     expected_output: str = ""
     needs: List[str] = None  # Information gaps that need user clarification
     output: Optional[str] = None  # Execution result
+    dependencies: List[str] = None  # IDs of todos that must complete before this one
+    parallel_group: Optional[str] = None  # Group ID for parallel execution
+    execution_order: int = 0  # Execution order within parallel group
 
     def __post_init__(self):
         if self.needs is None:
@@ -98,6 +101,9 @@ class AgentState(TypedDict):
     # Control flow
     retries: int
     max_retries: int
+
+    # Metrics and observability
+    metrics: Dict[str, Any]  # Runtime metrics collection
 
     # Status tracking
     current_node: str

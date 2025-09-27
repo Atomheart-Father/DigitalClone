@@ -37,12 +37,13 @@ class Message(BaseModel):
     role: Role = Field(..., description="Role of the message sender")
     content: str = Field(..., description="Message content text")
     tool_call: Optional[ToolCall] = Field(None, description="Tool call information (assistant messages only)")
+    tool_calls: List[ToolCall] = Field(default_factory=list, description="List of tool calls (OpenAI format)")
     tool_result: Optional[ToolResult] = Field(None, description="Tool execution result (tool messages only)")
     metadata: Dict[str, Any] = Field(default_factory=dict, description="Additional metadata")
 
     def is_function_call(self) -> bool:
         """Check if this message contains a function call."""
-        return self.tool_call is not None
+        return self.tool_call is not None or len(self.tool_calls) > 0
 
     def is_ask_user(self) -> bool:
         """Check if this message is asking the user for clarification."""
@@ -94,6 +95,16 @@ class ToolMeta(BaseModel):
     complexity: str = Field("simple", description="Complexity level: simple or complex")
     arg_hint: str = Field("", description="Hints for parameter formatting and requirements")
     caller_snippet: str = Field("", description="Special calling instructions and examples")
+
+    def __hash__(self):
+        """Make ToolMeta hashable based on name."""
+        return hash(self.name)
+
+    def __eq__(self, other):
+        """Equality based on name."""
+        if isinstance(other, ToolMeta):
+            return self.name == other.name
+        return False
 
 
 class ToolExecutionResult(BaseModel):

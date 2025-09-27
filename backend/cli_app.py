@@ -11,21 +11,25 @@ import argparse
 import logging
 from typing import List, Optional
 
+# 直接使用绝对导入（start.py已设置sys.path）
 import config
 import message_types
 import logger
 
-# Import graph modules with proper error handling
+# Import graph modules (start.py已设置sys.path)
 try:
-    from graph import graph_app, planner_app
-    from graph.state import create_initial_state
-    from tool_prompt_builder import load_system_prompt
+    import graph
+    import tool_prompt_builder
+    graph_app = graph.graph_app
+    planner_app = graph.planner_app
+    create_initial_state = graph.state.create_initial_state
+    load_system_prompt = tool_prompt_builder.load_system_prompt
     GRAPH_AVAILABLE = True
+    logger.logger.info("Graph modules imported successfully")
 except ImportError as e:
     logger.logger.warning(f"Graph modules not available: {e}")
     GRAPH_AVAILABLE = False
-    # Fallback imports for compatibility
-    from tool_prompt_builder import load_system_prompt
+    load_system_prompt = None
 
 # 为了兼容性，创建别名
 config = config.config
@@ -49,6 +53,7 @@ class CLIApp:
         self.conversation_history: List[Message] = []
         self.awaiting_user_input = False
         self.logger = ConversationLogger()
+        self.last_planner_state = None  # Save last planner state for continuation
 
     def run(self):
         """Main CLI application loop."""
@@ -481,14 +486,120 @@ class CLIApp:
             self._handle_graph_execution(initial_state)
 
     def _handle_planner_execution(self, user_input: str, route_decision):
-        """Handle planner execution using LangGraph planner."""
+        """Handle planner execution using LangGraph planner with heartbeat monitoring."""
         try:
             # Create initial state for planner
             initial_state = create_initial_state(user_input)
 
-            # Execute planner graph
-            config = {"configurable": {"thread_id": f"planner-{user_input[:20]}"}}  # Use input prefix for thread ID
-            final_state = planner_app.invoke(initial_state, config=config)
+            # Execute planner graph with heartbeat monitoring
+            config = {
+                "configurable": {"thread_id": f"planner-{user_input[:20]}"},  # Use input prefix for thread ID
+                "recursion_limit": 100  # Increase from default 25 to handle complex planning
+            }
+
+            # Hotfix-4: Add heartbeat logging for planner execution monitoring
+            import time
+            start_time = time.time()
+            logger.info("Starting planner execution...")
+
+            # Use LangGraph interrupt mechanism for user input handling
+            final_state = None
+            try:
+                # Stream with automatic interrupt handling for user input
+                accumulated_state = initial_state.copy()
+                for event in planner_app.stream(initial_state, config=config):
+                    # Handle LangGraph interrupts (user input required)
+                    if "__interrupt__" in event:
+                        interrupt_info = event["__interrupt__"]
+                        logger.info("🎯 GRAPH INTERRUPT DETECTED - User input required")
+
+                        # Get the state at interrupt point
+                        interrupted_state = interrupt_info[0] if isinstance(interrupt_info, list) else interrupt_info
+
+                        if interrupted_state.get("needs_user_input"):
+                            needs_info = interrupted_state["needs_user_input"]
+                            prompt = f"需要为 '{needs_info.get('todo_title', '任务')}' 提供参数: {', '.join(needs_info.get('needs', []))}"
+
+                            print(f"\n\033[33m[USER INPUT REQUIRED]\033[0m {prompt}")
+                            try:
+                                import select
+                                import sys
+
+                                print("> ", end="", flush=True)
+                                ready, _, _ = select.select([sys.stdin], [], [], 120.0)
+
+                                if ready:
+                                    user_text = input().strip()
+                                else:
+                                    print("\n输入超时，使用默认值继续...")
+                                    user_text = ""
+
+                            except (EOFError, KeyboardInterrupt):
+                                print("\n操作取消")
+                                user_text = ""
+
+                            # Resume graph execution with user input
+                            user_input = {param: user_text for param in needs_info.get('needs', [])}
+                            resume_state = interrupted_state.copy()
+                            resume_state.update({
+                                "user_provided_input": user_input,
+                                "needs_info": needs_info
+                            })
+
+                            logger.info("✅ User input collected, resuming graph execution")
+
+                            # Resume from interrupt point
+                            for resume_event in planner_app.stream(resume_state, config=config):
+                                for node_name, node_state in resume_event.items():
+                                    accumulated_state.update(node_state)
+
+                                    # Check for completion
+                                    if node_state.get("should_end") or node_state.get("final_answer"):
+                                        final_state = accumulated_state.copy()
+                                        break
+                                else:
+                                    continue
+                                break
+                            break
+
+                    # Normal event processing
+                    for node_name, node_state in event.items():
+                        accumulated_state.update(node_state)
+
+                        # Log progress
+                        if node_name == "planner_generate" and node_state.get("plan"):
+                            logger.info(f"Planner generated {len(node_state['plan'])} todos")
+
+                        # Check for completion
+                        if node_state.get("should_end") or node_state.get("final_answer"):
+                            final_state = accumulated_state.copy()
+                            break
+                    else:
+                        continue
+                    break
+
+                    # Safety timeout check (5 minutes max)
+                    if time.time() - start_time > 300:
+                        logger.error("Planner execution timeout after 5 minutes")
+                        raise TimeoutError("Planner execution exceeded 5 minute timeout")
+
+                if final_state is None:
+                    # Fallback to invoke if streaming didn't complete
+                    logger.warning("Planner streaming didn't complete, falling back to invoke")
+                    final_state = planner_app.invoke(initial_state, config=config)
+
+            except Exception as stream_error:
+                logger.warning(f"Planner streaming failed: {stream_error}, falling back to invoke")
+                final_state = planner_app.invoke(initial_state, config=config)
+
+            execution_time = time.time() - start_time
+            logger.info(f"Planner execution completed in {execution_time:.2f}s")
+
+            # Check if user input is needed before showing results
+            if final_state.get("needs_user_input"):
+                logger.info("User input required, triggering parameter collection")
+                self._handle_parameter_collection(final_state["needs_user_input"])
+                return
 
             # Extract the final answer
             if final_state["final_answer"]:
@@ -534,6 +645,9 @@ class CLIApp:
         if result.get("awaiting_user_input"):
             self.awaiting_user_input = True
             print(f"\r{result['response']}")
+        elif result.get("needs_user_input"):
+            # New mechanism: collect specific parameters from user
+            self._handle_parameter_collection(result["needs_user_input"])
         else:
             self.awaiting_user_input = False
             self._display_response(result)
@@ -737,6 +851,139 @@ class CLIApp:
             print(f"\r处理澄清信息时出错: {e}")
             logger.error(f"Error handling clarification: {e}")
             self.awaiting_user_input = False
+
+    def _handle_parameter_collection(self, needs_info: dict):
+        """Handle collection of specific parameters from user."""
+        print(f"\n🔍 需要收集参数用于: {needs_info['todo_title']}")
+        print(f"请提供以下参数:")
+
+        collected_params = {}
+        for param in needs_info["needs"]:
+            while True:
+                try:
+                    value = input(f"  {param}: ").strip()
+                    if value:
+                        collected_params[param] = value
+                        break
+                    else:
+                        print(f"  ❌ {param}不能为空，请重新输入")
+                except (EOFError, KeyboardInterrupt):
+                    print("\n操作取消")
+                    return
+
+        print("✅ 参数收集完成，正在继续执行...")  # Continue with collected parameters
+        self._continue_with_parameters(collected_params, needs_info)
+
+    def _continue_with_parameters(self, parameters: dict, needs_info: dict):
+        """Continue execution with collected parameters."""
+        try:
+            # Check if we have a saved planner state to continue
+            if self.last_planner_state and self.last_planner_state.get("plan"):
+                # Continue the previous planner execution with updated parameters
+                self._continue_planner_execution(parameters, needs_info)
+                return
+
+            # Fallback to agent method for non-planner continuations
+            result = agent.continue_with_parameter_input(
+                parameters,
+                self.conversation_history,
+                needs_info
+            )
+
+            # Since this is a continuation of planner execution,
+            # we need to handle the response differently
+            if result.get("awaiting_user_input") or result.get("needs_user_input"):
+                # Still needs more input
+                if result.get("awaiting_user_input"):
+                    self.awaiting_user_input = True
+                    print(f"\r{result['response']}")
+                elif result.get("needs_user_input"):
+                    self._handle_parameter_collection(result["needs_user_input"])
+                return
+
+            # Execution completed
+            self._display_response(result)
+
+            # Update conversation history
+            self.conversation_history = result["final_messages"]
+
+            # Log continuation
+            self.logger.log_continuation(
+                clarification=f"Parameter input: {parameters}",
+                messages=result["final_messages"],
+                tool_calls_count=result["tool_calls_made"]
+            )
+
+            # Display response
+            self._display_response(result)
+
+        except Exception as e:
+            print(f"处理参数输入时出错: {e}")
+            logger.error(f"Error handling parameter input: {e}")
+
+    def _continue_planner_execution(self, parameters: dict, needs_info: dict):
+        """Continue a previously interrupted planner execution with user parameters."""
+        try:
+            if not self.last_planner_state:
+                raise ValueError("No saved planner state to continue")
+
+            # Update the saved state with user provided parameters
+            updated_state = self.last_planner_state.copy()
+
+            # Set up state for ask_user_interrupt_node to process
+            updated_state["user_provided_input"] = parameters
+            updated_state["needs_info"] = needs_info
+
+            # Clear the needs_user_input flag since we have the parameters
+            updated_state["needs_user_input"] = False
+
+            # Add a system message indicating parameter collection completion
+            param_summary = ", ".join([f"{k}='{v}'" for k, v in parameters.items()])
+            system_message = Message(
+                role=Role.SYSTEM,
+                content=f"用户已提供所需参数: {param_summary}。继续执行计划。"
+            )
+            updated_state["messages"].append(system_message)
+
+            logger.info(f"Continuing planner execution with parameters: {parameters}")
+
+            # Continue the planner execution from the updated state
+            config = {
+                "configurable": {"thread_id": f"planner-continuation-{hash(str(parameters))}"},
+                "recursion_limit": 100
+            }
+
+            # Execute the planner from the updated state
+            final_state = planner_app.invoke(updated_state, config=config)
+
+            # Handle the final result
+            if final_state.get("final_answer"):
+                print(final_state["final_answer"])
+            elif final_state["messages"]:
+                # Get the last assistant message
+                for msg in reversed(final_state["messages"]):
+                    if msg.role == Role.ASSISTANT:
+                        print(msg.content)
+                        break
+
+            # Update conversation history
+            self.conversation_history = final_state["messages"]
+
+            # Clear the saved state since execution is complete
+            self.last_planner_state = None
+
+            # Log the completion
+            self.logger.log_continuation(
+                clarification=f"Planner continuation with parameters: {parameters}",
+                messages=final_state["messages"],
+                tool_calls_count=final_state.get("tool_call_count", 0)
+            )
+
+        except Exception as e:
+            print(f"继续规划执行时出错: {e}")
+            logger.error(f"Error continuing planner execution: {e}")
+            # Reset state on error
+            self.last_planner_state = None
 
     def _display_response(self, result: dict):
         """Display the final response."""

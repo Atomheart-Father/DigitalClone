@@ -42,13 +42,75 @@ class LLMClient(ABC):
         self,
         messages: List[Message],
         functions: Optional[List[Dict[str, Any]]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
         stream: bool = False,
         system_prompt: Optional[str] = None,
         response_format: Optional[Dict[str, Any]] = None,
         **kwargs
     ) -> Union[LLMResponse, Generator[StreamingChunk, None, None]]:
         """Generate a response from the LLM."""
-        pass
+
+    @classmethod
+    def reasoner_micro_decide(cls, prompt: str, connect_timeout: int = 10, read_timeout: int = 30) -> Optional[str]:
+        """
+        Make a micro-decision using Reasoner model with short timeouts.
+
+        This is a specialized method for lightweight decision-making that avoids
+        the instability issues of complex prompts with Reasoner.
+
+        Args:
+            prompt: Micro-prompt (<=200 tokens)
+            connect_timeout: Connection timeout in seconds
+            read_timeout: Read timeout in seconds
+
+        Returns:
+            Response content or None if empty/failed
+        """
+        try:
+            headers = {
+                "Authorization": f"Bearer {config.DEEPSEEK_API_KEY}",
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            }
+
+            payload = {
+                "model": config.MODEL_REASONER,
+                "messages": [{"role": "user", "content": prompt}],
+                "stream": False  # Non-streaming to avoid keep-alive issues
+            }
+
+            logger.info(f"Micro-decision call: {len(prompt)} chars, timeouts=({connect_timeout}s, {read_timeout}s)")
+
+            response = requests.post(
+                config.DEEPSEEK_BASE_URL + "/chat/completions",
+                headers=headers,
+                json=payload,
+                timeout=(connect_timeout, read_timeout)
+            )
+
+            response.raise_for_status()
+            data = response.json()
+
+            # Extract content, handling empty responses gracefully
+            content = data.get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+
+            if not content:
+                logger.warning("Reasoner returned empty content")
+                return None
+
+            logger.info(f"Micro-decision result: {content[:50]}...")
+            return content
+
+        except requests.exceptions.Timeout:
+            logger.warning(f"Reasoner micro-decision timeout after {read_timeout}s")
+            return None
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Reasoner micro-decision failed: {e}")
+            return None
+        except Exception as e:
+            logger.error(f"Unexpected error in reasoner_micro_decide: {e}")
+            return None
 
     def _convert_messages_to_api_format(
         self,
@@ -193,6 +255,8 @@ class DeepSeekChatClient(LLMClient):
         self,
         messages: List[Message],
         functions: Optional[List[Dict[str, Any]]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
         stream: bool = False,
         system_prompt: Optional[str] = None,
         response_format: Optional[Dict[str, Any]] = None,
@@ -216,10 +280,17 @@ class DeepSeekChatClient(LLMClient):
             "stream": stream
         }
 
-        if functions:
+        # Handle tools/function calling (new OpenAI format)
+        if tools:
+            payload["tools"] = tools
+            if tool_choice:
+                payload["tool_choice"] = tool_choice
+        elif functions:
+            # Legacy support for functions parameter
             payload["functions"] = functions
 
-        if response_format:
+        # Only set response_format when not using tools (to avoid conflicts)
+        if response_format and not tools:
             payload["response_format"] = response_format
 
         try:
@@ -292,6 +363,8 @@ class DeepSeekReasonerClient(LLMClient):
         self,
         messages: List[Message],
         functions: Optional[List[Dict[str, Any]]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
         stream: bool = False,
         system_prompt: Optional[str] = None,
         response_format: Optional[Dict[str, Any]] = None,
@@ -301,10 +374,18 @@ class DeepSeekReasonerClient(LLMClient):
         if not self.api_key:
             raise ValueError("DeepSeek API key is required")
 
+        # Hotfix-1: For planner scenarios (JSON response_format), force non-streaming
+        # and use explicit timeout to prevent blocking
+        is_planner_scenario = response_format and response_format.get("type") == "json_object"
+        effective_stream = stream and not is_planner_scenario  # Force non-stream for planner
+        effective_timeout = (30, 180) if is_planner_scenario else self.timeout  # Longer timeout for planner (30s connect, 180s read)
+
         url = f"{self.base_url}/chat/completions"
         headers = {
             "Authorization": f"Bearer {self.api_key}",
-            "Content-Type": "application/json"
+            "Content-Type": "application/json",
+            # Hotfix-1: Non-streaming doesn't need SSE
+            "Accept": "application/json" if not effective_stream else "text/event-stream"
         }
 
         payload = {
@@ -312,7 +393,7 @@ class DeepSeekReasonerClient(LLMClient):
             "messages": self._convert_messages_to_api_format(messages, system_prompt),
             "temperature": 0.1,  # Lower temperature for reasoning tasks
             "max_tokens": 4000,  # Higher token limit for complex reasoning
-            "stream": stream
+            "stream": effective_stream  # Use effective_stream instead of stream
         }
 
         if functions:
@@ -322,29 +403,39 @@ class DeepSeekReasonerClient(LLMClient):
             payload["response_format"] = response_format
 
         try:
-            logger.debug(f"Sending request to {url} with model {self.model_name}")
+            logger.info(f"🔄 Starting DeepSeek {self.model_name} API call (stream={effective_stream}, is_planner={is_planner_scenario})")
+            logger.debug(f"Request URL: {url}")
+            logger.debug(f"Request timeout: {effective_timeout}")
+            logger.debug(f"Request payload size: {len(str(payload))} chars")
             start_time = time.time()
 
+            logger.info("📡 Sending HTTP POST request...")
             response = requests.post(
                 url,
                 headers=headers,
                 json=payload,
-                timeout=self.timeout,
-                stream=stream  # Enable streaming for response
+                timeout=effective_timeout,  # Use effective_timeout with read timeout
+                stream=effective_stream  # Use effective_stream
             )
 
             duration = time.time() - start_time
-            logger.debug(f"API call completed in {duration:.2f}s")
+            logger.info(f"📨 HTTP response received in {duration:.2f}s (status: {response.status_code})")
 
             response.raise_for_status()
+            logger.info("✅ HTTP response validated successfully")
 
-            if stream:
+            if effective_stream:
                 # Handle streaming response
+                logger.info("🏃 Processing streaming response...")
                 return self._handle_streaming_response(response)
             else:
                 # Handle regular response
+                logger.info("📄 Processing regular JSON response...")
                 response_data = response.json()
-                return self._parse_api_response(response_data)
+                logger.debug(f"Response data keys: {list(response_data.keys()) if isinstance(response_data, dict) else 'non-dict'}")
+                result = self._parse_api_response(response_data)
+                logger.info(f"✅ Response parsed successfully, content length: {len(result.content) if result.content else 0}")
+                return result
 
         except requests.Timeout:
             logger.error("DeepSeek Reasoner API request timed out")
@@ -357,23 +448,41 @@ class DeepSeekReasonerClient(LLMClient):
             raise
 
     def _handle_streaming_response(self, response) -> Generator[StreamingChunk, None, None]:
-        """Handle streaming response from DeepSeek API."""
+        """Handle streaming response from DeepSeek API with proper timeout and heartbeat handling."""
+        logger.info("🎬 Starting streaming response processing...")
+        chunk_count = 0
+        keepalive_count = 0
         try:
-            for line in response.iter_lines():
-                line = line.decode('utf-8')
+            for line in response.iter_lines(decode_unicode=True):
+                if not line:
+                    keepalive_count += 1
+                    # Only log keepalive every 50 occurrences to reduce log noise
+                    if keepalive_count % 50 == 0:
+                        logger.debug(f"💓 Received {keepalive_count} keepalive/heartbeat lines")
+                    continue  # Skip keepalive/heartbeat lines
+                if line.startswith(":"):
+                    # Comment lines are rare, can log each one at debug level
+                    logger.debug("💬 Received comment line")
+                    continue  # Skip comment lines
                 if line.startswith('data: '):
                     data = line[6:]  # Remove 'data: ' prefix
                     if data.strip() == '[DONE]':
+                        logger.info("🏁 Received [DONE] marker, ending stream")
                         break
 
                     try:
                         chunk_data = json.loads(data)
                         chunk = self._parse_streaming_chunk(chunk_data)
+                        chunk_count += 1
+                        if chunk_count % 10 == 0:  # Log every 10 chunks
+                            logger.info(f"📦 Processed {chunk_count} streaming chunks...")
                         yield chunk
-                    except json.JSONDecodeError:
-                        continue
+                    except json.JSONDecodeError as je:
+                        logger.warning(f"⚠️ Skipping malformed chunk: {je}")
+                        continue  # Skip malformed chunks
+            logger.info(f"✅ Streaming response completed, total chunks: {chunk_count}, keepalive lines: {keepalive_count}")
         except Exception as e:
-            logger.error(f"Error processing streaming response: {e}")
+            logger.error(f"❌ Error processing streaming response after {chunk_count} chunks and {keepalive_count} keepalive lines: {e}")
             raise
 
 
@@ -387,6 +496,8 @@ class MockClient(LLMClient):
         self,
         messages: List[Message],
         functions: Optional[List[Dict[str, Any]]] = None,
+        tools: Optional[List[Dict[str, Any]]] = None,
+        tool_choice: Optional[Union[str, Dict[str, Any]]] = None,
         stream: bool = False,
         system_prompt: Optional[str] = None,
         response_format: Optional[Dict[str, Any]] = None,
